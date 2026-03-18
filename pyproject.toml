@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macro-intel"
+version = "0.1.0"
+description = "Probabilistic macroeconomic intelligence system with Bayesian regime detection"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    # Core
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "scipy>=1.11.0",
+
+    # Data sources
+    "openbb>=4.7.0",
+    "openbb-fred>=1.0.0",
+    "yfinance>=0.2.31",
+    "wbgapi>=1.0.12",
+    "requests>=2.31.0",
+
+    # Bayesian modeling
+    "pymc>=5.10.0",
+    "arviz>=0.17.0",
+
+    # Network graphs
+    "pyvis>=0.3.2",
+    "networkx>=3.1",
+
+    # Monitoring
+    "evidently>=0.4.0",
+
+    # UI & CLI
+    "streamlit>=1.28.0",
+    "plotly>=5.17.0",
+    "typer>=0.9.0",
+
+    # Config
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+portfolio = [
+    "portfolio_lab",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+macro-intel = "macro_intel.app.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["macro_intel*"]
+
+[tool.pytest.ini_options]
+testpaths = ["macro_intel/tests"]
+pythonpath = ["."]
