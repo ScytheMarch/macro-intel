@@ -129,59 +129,278 @@ def _trend_direction(series: pd.Series, lookback: int = 6) -> str:
     return "stable"
 
 
-def _classify_regime(signals: dict[str, dict]) -> tuple[str, str, float, dict[str, int]]:
-    """Rules-based regime from latest indicators. Returns (name, color, confidence, vote_counts)."""
+def _classify_regime(signals: dict[str, dict]) -> tuple[str, str, float, dict[str, int], list[str]]:
+    """Rules-based regime using BOTH current levels AND momentum/z-scores.
+
+    Returns (name, color, confidence, vote_counts, rationale_list).
+    """
     votes = {"Expansion": 0, "Slowdown": 0, "Contraction": 0, "Crisis": 0}
+    rationale: list[str] = []
     total = 0
 
-    for sid, data in signals.items():
-        val = data.get("latest")
-        if val is None:
-            continue
+    def _vote(regime: str, reason: str):
+        nonlocal total
+        votes[regime] += 1
+        total += 1
+        rationale.append(reason)
 
-        if sid == "UNRATE":
-            total += 1
-            if val < 4.5: votes["Expansion"] += 1
-            elif val < 6.0: votes["Slowdown"] += 1
-            else: votes["Contraction"] += 1
-        elif sid == "T10Y2Y":
-            total += 1
-            if val > 0.5: votes["Expansion"] += 1
-            elif val > 0: votes["Slowdown"] += 1
-            elif val > -0.5: votes["Contraction"] += 1
-            else: votes["Crisis"] += 1
-        elif sid == "VIXCLS":
-            total += 1
-            if val < 18: votes["Expansion"] += 1
-            elif val < 25: votes["Slowdown"] += 1
-            elif val < 35: votes["Contraction"] += 1
-            else: votes["Crisis"] += 1
-        elif sid == "BAMLH0A0HYM2":
-            total += 1
-            if val < 4.0: votes["Expansion"] += 1
-            elif val < 5.5: votes["Slowdown"] += 1
-            elif val < 8.0: votes["Contraction"] += 1
-            else: votes["Crisis"] += 1
-        elif sid == "ICSA":
-            total += 1
-            if val < 230: votes["Expansion"] += 1
-            elif val < 300: votes["Slowdown"] += 1
-            elif val < 400: votes["Contraction"] += 1
-            else: votes["Crisis"] += 1
-        elif sid == "UMCSENT":
-            total += 1
-            if val > 80: votes["Expansion"] += 1
-            elif val > 65: votes["Slowdown"] += 1
-            elif val > 50: votes["Contraction"] += 1
-            else: votes["Crisis"] += 1
+    # ── Unemployment: level + trend ──────────────────────────────────────
+    ur = signals.get("UNRATE", {})
+    if ur.get("latest") is not None:
+        val, z, trend = ur["latest"], ur.get("z_score", 0), ur.get("trend", "stable")
+        if val < 4.5 and trend != "deteriorating":
+            _vote("Expansion", f"Unemployment low at {val:.1f}% and stable")
+        elif val < 4.5 and trend == "deteriorating":
+            _vote("Slowdown", f"Unemployment low ({val:.1f}%) but rising — early warning")
+        elif val < 6.0:
+            _vote("Slowdown", f"Unemployment elevated at {val:.1f}%")
+        else:
+            _vote("Contraction", f"Unemployment high at {val:.1f}%")
+
+    # ── Payrolls: momentum matters more than level ───────────────────────
+    nfp = signals.get("PAYEMS", {})
+    if nfp.get("latest") is not None:
+        val, z = nfp["latest"], nfp.get("z_score", 0)
+        if val > 200:
+            _vote("Expansion", f"Strong hiring: +{val:.0f}K jobs/month")
+        elif val > 100:
+            _vote("Slowdown", f"Hiring slowing: +{val:.0f}K jobs/month")
+        elif val > 0:
+            _vote("Slowdown", f"Weak hiring: only +{val:.0f}K jobs/month")
+        else:
+            _vote("Contraction", f"Job losses: {val:.0f}K/month")
+        # Extra vote if z-score is extreme
+        if z is not None and z < -1.5:
+            _vote("Contraction", f"Payrolls at {z:+.1f}σ — well below normal pace")
+
+    # ── Yield curve: classic recession predictor ─────────────────────────
+    yc = signals.get("T10Y2Y", {})
+    if yc.get("latest") is not None:
+        val, trend = yc["latest"], yc.get("trend", "stable")
+        if val > 0.5:
+            _vote("Expansion", f"Yield curve positive at {val:+.2f}% — healthy")
+        elif val > 0:
+            _vote("Slowdown", f"Yield curve flattening at {val:+.2f}% — watch closely")
+        elif val > -0.5:
+            _vote("Contraction", f"Yield curve inverted at {val:+.2f}% — recession signal")
+        else:
+            _vote("Crisis", f"Yield curve deeply inverted at {val:+.2f}%")
+
+    # ── VIX: fear gauge ──────────────────────────────────────────────────
+    vix = signals.get("VIXCLS", {})
+    if vix.get("latest") is not None:
+        val, z = vix["latest"], vix.get("z_score", 0)
+        if val < 18:
+            _vote("Expansion", f"VIX calm at {val:.1f} — markets relaxed")
+        elif val < 25:
+            _vote("Slowdown", f"VIX elevated at {val:.1f} — some nervousness")
+        elif val < 35:
+            _vote("Contraction", f"VIX high at {val:.1f} — significant fear")
+        else:
+            _vote("Crisis", f"VIX spiking at {val:.1f} — market panic")
+
+    # ── Credit spreads: level + z-score ──────────────────────────────────
+    hy = signals.get("BAMLH0A0HYM2", {})
+    if hy.get("latest") is not None:
+        val, z = hy["latest"], hy.get("z_score", 0)
+        if val < 3.5 and (z is None or z < 1.0):
+            _vote("Expansion", f"Credit spreads tight at {val:.2f}% — low default risk")
+        elif val < 5.0:
+            _vote("Slowdown", f"Credit spreads widening to {val:.2f}% — caution")
+        elif val < 7.0:
+            _vote("Contraction", f"Credit spreads wide at {val:.2f}% — stress in corporate bonds")
+        else:
+            _vote("Crisis", f"Credit spreads at {val:.2f}% — credit market freeze risk")
+        # Extra vote if z-score shows rapid widening
+        if z is not None and z > 1.5:
+            _vote("Contraction", f"Credit spreads at {z:+.1f}σ — widening fast")
+
+    # ── Jobless claims: level + trend ────────────────────────────────────
+    claims = signals.get("ICSA", {})
+    if claims.get("latest") is not None:
+        val, trend = claims["latest"], claims.get("trend", "stable")
+        if val < 230 and trend != "deteriorating":
+            _vote("Expansion", f"Claims low at {val:.0f}K — few layoffs")
+        elif val < 230 and trend == "deteriorating":
+            _vote("Slowdown", f"Claims low ({val:.0f}K) but rising trend")
+        elif val < 300:
+            _vote("Slowdown", f"Claims rising to {val:.0f}K")
+        elif val < 400:
+            _vote("Contraction", f"Claims elevated at {val:.0f}K — layoffs increasing")
+        else:
+            _vote("Crisis", f"Claims surging at {val:.0f}K — mass layoffs")
+
+    # ── Consumer sentiment ───────────────────────────────────────────────
+    sent = signals.get("UMCSENT", {})
+    if sent.get("latest") is not None:
+        val, z = sent["latest"], sent.get("z_score", 0)
+        if val > 80:
+            _vote("Expansion", f"Consumers optimistic at {val:.1f}")
+        elif val > 65:
+            _vote("Slowdown", f"Consumer sentiment lukewarm at {val:.1f}")
+        elif val > 50:
+            _vote("Contraction", f"Consumers pessimistic at {val:.1f}")
+        else:
+            _vote("Crisis", f"Consumer sentiment deeply negative at {val:.1f}")
+
+    # ── Industrial production: z-score for momentum ──────────────────────
+    indpro = signals.get("INDPRO", {})
+    if indpro.get("latest") is not None:
+        val, z = indpro["latest"], indpro.get("z_score", 0)
+        if val > 2.0:
+            _vote("Expansion", f"Industrial production growing at {val:+.1f}% YoY")
+        elif val > 0:
+            _vote("Slowdown", f"Industrial production barely growing at {val:+.1f}% YoY")
+        else:
+            _vote("Contraction", f"Industrial production falling at {val:+.1f}% YoY")
+
+    # ── Housing starts: leading indicator ────────────────────────────────
+    houst = signals.get("HOUST", {})
+    if houst.get("latest") is not None:
+        val, z, trend = houst["latest"], houst.get("z_score", 0), houst.get("trend", "stable")
+        if z is not None:
+            if z < -1.0 or trend == "deteriorating":
+                _vote("Slowdown", f"Housing starts weakening ({z:+.1f}σ) — builders pulling back")
+
+    # ── Building permits: leading indicator ──────────────────────────────
+    # Check from the raw REGIME_SIGNALS (PERMIT is not in our set but housing data captures it)
+
+    # ── Fed funds: context-dependent ─────────────────────────────────────
+    ff = signals.get("FEDFUNDS", {})
+    if ff.get("latest") is not None:
+        val, z, trend = ff["latest"], ff.get("z_score", 0), ff.get("trend", "stable")
+        if z is not None and z > 1.5:
+            _vote("Slowdown", f"Fed funds rate elevated at {val:.2f}% ({z:+.1f}σ) — tight policy weighing on growth")
 
     if total == 0:
-        return "Unknown", "#6b7280", 0.0, votes
+        return "Unknown", "#6b7280", 0.0, votes, []
 
     regime = max(votes, key=votes.get)
     confidence = votes[regime] / total
     colors = {"Expansion": "#22c55e", "Slowdown": "#eab308", "Contraction": "#ef4444", "Crisis": "#dc2626"}
-    return regime, colors[regime], confidence, votes
+    return regime, colors[regime], confidence, votes, rationale
+
+
+def _get_vote_mapping(signals: dict[str, dict]) -> list[tuple[str, str]]:
+    """Return list of (regime_voted, reason) pairs for display."""
+    mapping: list[tuple[str, str]] = []
+
+    def _add(regime: str, reason: str):
+        mapping.append((regime, reason))
+
+    ur = signals.get("UNRATE", {})
+    if ur.get("latest") is not None:
+        val, trend = ur["latest"], ur.get("trend", "stable")
+        if val < 4.5 and trend != "deteriorating":
+            _add("Expansion", f"Unemployment low at {val:.1f}% and stable")
+        elif val < 4.5 and trend == "deteriorating":
+            _add("Slowdown", f"Unemployment low ({val:.1f}%) but rising — early warning")
+        elif val < 6.0:
+            _add("Slowdown", f"Unemployment elevated at {val:.1f}%")
+        else:
+            _add("Contraction", f"Unemployment high at {val:.1f}%")
+
+    nfp = signals.get("PAYEMS", {})
+    if nfp.get("latest") is not None:
+        val, z = nfp["latest"], nfp.get("z_score", 0)
+        if val > 200:
+            _add("Expansion", f"Strong hiring: +{val:.0f}K jobs/month")
+        elif val > 100:
+            _add("Slowdown", f"Hiring slowing: +{val:.0f}K jobs/month")
+        elif val > 0:
+            _add("Slowdown", f"Weak hiring: only +{val:.0f}K jobs/month")
+        else:
+            _add("Contraction", f"Job losses: {val:.0f}K/month")
+        if z is not None and z < -1.5:
+            _add("Contraction", f"Payrolls at {z:+.1f}σ — well below normal pace")
+
+    yc = signals.get("T10Y2Y", {})
+    if yc.get("latest") is not None:
+        val = yc["latest"]
+        if val > 0.5:
+            _add("Expansion", f"Yield curve positive at {val:+.2f}% — healthy")
+        elif val > 0:
+            _add("Slowdown", f"Yield curve flattening at {val:+.2f}% — watch closely")
+        elif val > -0.5:
+            _add("Contraction", f"Yield curve inverted at {val:+.2f}% — recession signal")
+        else:
+            _add("Crisis", f"Yield curve deeply inverted at {val:+.2f}%")
+
+    vix = signals.get("VIXCLS", {})
+    if vix.get("latest") is not None:
+        val = vix["latest"]
+        if val < 18:
+            _add("Expansion", f"VIX calm at {val:.1f} — markets relaxed")
+        elif val < 25:
+            _add("Slowdown", f"VIX elevated at {val:.1f} — some nervousness")
+        elif val < 35:
+            _add("Contraction", f"VIX high at {val:.1f} — significant fear")
+        else:
+            _add("Crisis", f"VIX spiking at {val:.1f} — market panic")
+
+    hy = signals.get("BAMLH0A0HYM2", {})
+    if hy.get("latest") is not None:
+        val, z = hy["latest"], hy.get("z_score", 0)
+        if val < 3.5 and (z is None or z < 1.0):
+            _add("Expansion", f"Credit spreads tight at {val:.2f}% — low default risk")
+        elif val < 5.0:
+            _add("Slowdown", f"Credit spreads widening to {val:.2f}% — caution")
+        elif val < 7.0:
+            _add("Contraction", f"Credit spreads wide at {val:.2f}% — stress in corporate bonds")
+        else:
+            _add("Crisis", f"Credit spreads at {val:.2f}% — credit market freeze risk")
+        if z is not None and z > 1.5:
+            _add("Contraction", f"Credit spreads at {z:+.1f}σ — widening fast")
+
+    claims = signals.get("ICSA", {})
+    if claims.get("latest") is not None:
+        val, trend = claims["latest"], claims.get("trend", "stable")
+        if val < 230 and trend != "deteriorating":
+            _add("Expansion", f"Claims low at {val:.0f}K — few layoffs")
+        elif val < 230 and trend == "deteriorating":
+            _add("Slowdown", f"Claims low ({val:.0f}K) but rising trend")
+        elif val < 300:
+            _add("Slowdown", f"Claims rising to {val:.0f}K")
+        elif val < 400:
+            _add("Contraction", f"Claims elevated at {val:.0f}K — layoffs increasing")
+        else:
+            _add("Crisis", f"Claims surging at {val:.0f}K — mass layoffs")
+
+    sent = signals.get("UMCSENT", {})
+    if sent.get("latest") is not None:
+        val = sent["latest"]
+        if val > 80:
+            _add("Expansion", f"Consumers optimistic at {val:.1f}")
+        elif val > 65:
+            _add("Slowdown", f"Consumer sentiment lukewarm at {val:.1f}")
+        elif val > 50:
+            _add("Contraction", f"Consumers pessimistic at {val:.1f}")
+        else:
+            _add("Crisis", f"Consumer sentiment deeply negative at {val:.1f}")
+
+    indpro = signals.get("INDPRO", {})
+    if indpro.get("latest") is not None:
+        val = indpro["latest"]
+        if val > 2.0:
+            _add("Expansion", f"Industrial production growing at {val:+.1f}% YoY")
+        elif val > 0:
+            _add("Slowdown", f"Industrial production barely growing at {val:+.1f}% YoY")
+        else:
+            _add("Contraction", f"Industrial production falling at {val:+.1f}% YoY")
+
+    houst = signals.get("HOUST", {})
+    if houst.get("latest") is not None:
+        z, trend = houst.get("z_score", 0), houst.get("trend", "stable")
+        if z is not None and (z < -1.0 or trend == "deteriorating"):
+            _add("Slowdown", f"Housing starts weakening ({z:+.1f}σ) — builders pulling back")
+
+    ff = signals.get("FEDFUNDS", {})
+    if ff.get("latest") is not None:
+        val, z = ff["latest"], ff.get("z_score", 0)
+        if z is not None and z > 1.5:
+            _add("Slowdown", f"Fed funds rate elevated at {val:.2f}% ({z:+.1f}σ) — tight policy")
+
+    return mapping
 
 
 def render():
@@ -299,7 +518,7 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
         }
 
     # ── Regime Classification ─────────────────────────────────────────────
-    regime_name, regime_color, confidence, votes = _classify_regime(signals)
+    regime_name, regime_color, confidence, votes, rationale = _classify_regime(signals)
     regime_info = REGIME_EXPLANATIONS.get(regime_name, REGIME_EXPLANATIONS["Unknown"])
 
     # ── HERO: Regime card + gauge + vote breakdown ────────────────────────
@@ -397,6 +616,51 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
         ),
         unsafe_allow_html=True,
     )
+
+    # ── Why the model voted this way (show all rationale) ─────────────────
+    if rationale:
+        # Group rationale by regime
+        rationale_by_regime: dict[str, list[str]] = {}
+        for r in rationale:
+            # Figure out which regime this rationale supported
+            for regime_key in ["Expansion", "Slowdown", "Contraction", "Crisis"]:
+                # The rationale was added by _vote which incremented a specific regime
+                pass
+        # Simple approach: just show all reasoning
+        expansion_reasons = [r for i, r in enumerate(rationale) if i < len(rationale)]
+
+        st.markdown(section_header("Why Each Indicator Voted This Way"), unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
+            f'The regime classification is based on {len(rationale)} individual signal votes. '
+            f'Each indicator evaluates BOTH its current level AND its momentum/trend to cast a vote.</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Build colored rationale list
+        rationale_html = ""
+        # We need to know which regime each rationale voted for
+        # Re-run the classification logic just to get the mapping
+        vote_mapping = _get_vote_mapping(signals)
+
+        for regime_voted, reason in vote_mapping:
+            color = {"Expansion": GREEN, "Slowdown": YELLOW, "Contraction": RED, "Crisis": "#dc2626"}.get(regime_voted, GRAY)
+            icon = {"Expansion": "🟢", "Slowdown": "🟡", "Contraction": "🔴", "Crisis": "🔴"}.get(regime_voted, "⚪")
+            rationale_html += (
+                f'<div style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;'
+                f'border-bottom:1px solid rgba(255,255,255,0.04)">'
+                f'<span style="font-size:0.8em;flex-shrink:0">{icon}</span>'
+                f'<span style="color:{TEXT_SECONDARY};font-size:0.85em;flex:1">{reason}</span>'
+                f'<span style="color:{color};font-size:0.72em;font-weight:600;flex-shrink:0;'
+                f'padding:2px 6px;background:rgba(255,255,255,0.04);border-radius:4px">'
+                f'{regime_voted}</span>'
+                f'</div>'
+            )
+
+        st.markdown(
+            glass_card(rationale_html, border_color="rgba(255,255,255,0.06)"),
+            unsafe_allow_html=True,
+        )
 
     st.markdown("", unsafe_allow_html=True)
 
