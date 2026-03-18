@@ -69,19 +69,19 @@ def main():
 
     # ── Page routing ──────────────────────────────────────────────────────
     if page == "Regime Dashboard":
-        from macro_intel.app.pages.regime_dashboard import render
+        from macro_intel.app.views.regime_dashboard import render
         render()
     elif page == "Feature Panel":
-        from macro_intel.app.pages.feature_panel_view import render
+        from macro_intel.app.views.feature_panel_view import render
         render()
     elif page == "Network Graphs":
-        from macro_intel.app.pages.network_view import render
+        from macro_intel.app.views.network_view import render
         render()
     elif page == "Drift Monitor":
-        from macro_intel.app.pages.drift_view import render
+        from macro_intel.app.views.drift_view import render
         render()
     elif page == "Portfolio Bridge":
-        from macro_intel.app.pages.portfolio_bridge import render
+        from macro_intel.app.views.portfolio_bridge import render
         render()
 
 
