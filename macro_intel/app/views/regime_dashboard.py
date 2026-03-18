@@ -121,7 +121,7 @@ def render():
     from macro_intel.app.styles import (
         glass_card, section_header, badge, metric_card,
         trend_color, trend_arrow, z_color, format_value,
-        CATEGORY_COLORS, GREEN, YELLOW, RED, GRAY, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
+        CATEGORY_COLORS, GREEN, YELLOW, RED, GRAY, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DIM,
     )
     from macro_intel.config.indicators import get_fred_indicators
     from macro_intel.data import cache, fred_client
