@@ -114,6 +114,55 @@ def _compute_z(series: pd.Series, window: int = 60) -> float | None:
     return float((series.iloc[-1] - mean) / std)
 
 
+def _compute_percentile(series: pd.Series, window: int = 60) -> float | None:
+    """Percentile rank of latest value within trailing window (0-100)."""
+    if len(series) < 12:
+        return None
+    lookback = series.tail(min(window, len(series)))
+    latest = lookback.iloc[-1]
+    return float((lookback < latest).sum() / len(lookback) * 100)
+
+
+def _compute_streak(series: pd.Series) -> int:
+    """Count consecutive increases (positive) or decreases (negative)."""
+    diffs = series.diff().dropna().tail(12)
+    streak = 0
+    if len(diffs) > 0:
+        last_sign = 1 if diffs.iloc[-1] > 0 else -1
+        for val in reversed(diffs.values):
+            if (val > 0 and last_sign > 0) or (val < 0 and last_sign < 0):
+                streak += last_sign
+            else:
+                break
+    return streak
+
+
+def _vs_moving_avg(series: pd.Series, window: int) -> float | None:
+    """Percent difference of latest value vs trailing moving average."""
+    if len(series) < window:
+        return None
+    avg = float(series.tail(window).mean())
+    if avg == 0:
+        return 0.0
+    latest = float(series.iloc[-1])
+    return round((latest - avg) / abs(avg) * 100, 2)
+
+
+def _magnitude_label(z: float | None) -> tuple[str, str]:
+    """Return (magnitude_text, color) based on z-score."""
+    if z is None:
+        return "N/A", "#6b7280"
+    az = abs(z)
+    if az < 0.5:
+        return "SMALL", "#6b7280"
+    elif az < 1.0:
+        return "MODERATE", "#eab308"
+    elif az < 2.0:
+        return "LARGE", "#f97316"
+    else:
+        return "EXTREME", "#ef4444"
+
+
 def _trend_direction(series: pd.Series, lookback: int = 6) -> str:
     if len(series) < lookback + 1:
         return "stable"
@@ -127,6 +176,76 @@ def _trend_direction(series: pd.Series, lookback: int = 6) -> str:
     elif slope < -0.01 * std:
         return "deteriorating"
     return "stable"
+
+
+def _build_narrative(data: dict) -> str:
+    """Build a rich plain-English narrative like econ-monitor."""
+    latest = data.get("latest")
+    prev = data.get("previous")
+    z = data.get("z_score")
+    percentile = data.get("percentile")
+    streak = data.get("streak", 0)
+    vs_3m = data.get("vs_3m")
+    vs_12m = data.get("vs_12m")
+    higher_is = data.get("higher_is", "neutral")
+
+    if latest is None or prev is None:
+        return ""
+
+    # Change direction
+    change = latest - prev
+    if change > 0:
+        change_dir = "rose"
+    elif change < 0:
+        change_dir = "fell"
+    else:
+        change_dir = "was unchanged"
+
+    # Economic signal based on direction + higher_is
+    if abs(change) < 0.001:
+        econ_signal = "neutral shift"
+    elif higher_is == "inflationary":
+        econ_signal = "hotter inflation pressure" if change > 0 else "cooling inflation"
+    elif higher_is == "expansionary":
+        econ_signal = "strengthening economic activity" if change > 0 else "weakening economic activity"
+    elif higher_is == "contractionary":
+        econ_signal = "increasing economic stress" if change > 0 else "easing economic stress"
+    else:
+        econ_signal = "neutral shift"
+
+    # Magnitude
+    mag, _ = _magnitude_label(z)
+
+    # Start building
+    parts = [f"The latest reading {change_dir} by {abs(change):.2f}, signaling {econ_signal}."]
+
+    if z is not None:
+        parts.append(f"This is a {mag.lower()} move ({z:+.1f}σ),")
+    if percentile is not None:
+        if percentile >= 90:
+            parts.append(f"at the {percentile:.0f}th percentile (near highs) of recent history.")
+        elif percentile <= 10:
+            parts.append(f"at the {percentile:.0f}th percentile (near lows) of recent history.")
+        else:
+            parts.append(f"at the {percentile:.0f}th percentile of recent history.")
+
+    # Streak
+    if abs(streak) >= 2:
+        streak_dir = "increases" if streak > 0 else "decreases"
+        parts.append(f"This marks {abs(streak)} consecutive {streak_dir}.")
+
+    # Moving average context
+    avg_parts = []
+    if vs_3m is not None and abs(vs_3m) > 1:
+        direction = "above" if vs_3m > 0 else "below"
+        avg_parts.append(f"{direction} 3m avg by {abs(vs_3m):.1f}%")
+    if vs_12m is not None and abs(vs_12m) > 2:
+        direction = "above" if vs_12m > 0 else "below"
+        avg_parts.append(f"{direction} 12m avg by {abs(vs_12m):.1f}%")
+    if avg_parts:
+        parts.append("Currently " + " and ".join(avg_parts) + ".")
+
+    return " ".join(parts)
 
 
 def _classify_regime(signals: dict[str, dict]) -> tuple[str, str, float, dict[str, int], list[str]]:
@@ -272,6 +391,41 @@ def _classify_regime(signals: dict[str, dict]) -> tuple[str, str, float, dict[st
         if z is not None and z > 1.5:
             _vote("Slowdown", f"Fed funds rate elevated at {val:.2f}% ({z:+.1f}σ) — tight policy weighing on growth")
 
+    # ── Streak-based momentum votes ───────────────────────────────────
+    # Persistent directional movement is a strong signal
+    ur_streak = signals.get("UNRATE", {}).get("streak", 0)
+    if ur_streak >= 3:
+        _vote("Contraction", f"Unemployment rising for {ur_streak} consecutive months — momentum deteriorating")
+    elif ur_streak <= -3:
+        _vote("Expansion", f"Unemployment falling for {abs(ur_streak)} consecutive months — labor market strengthening")
+
+    nfp_streak = signals.get("PAYEMS", {}).get("streak", 0)
+    if nfp_streak <= -3:
+        _vote("Contraction", f"Payrolls declining for {abs(nfp_streak)} consecutive months — hiring collapsing")
+
+    claims_streak = signals.get("ICSA", {}).get("streak", 0)
+    if claims_streak >= 4:
+        _vote("Contraction", f"Jobless claims rising for {claims_streak} consecutive weeks — layoffs accelerating")
+
+    cpi_streak = signals.get("CPIAUCSL", {}).get("streak", 0)
+    if cpi_streak >= 4:
+        _vote("Slowdown", f"CPI accelerating for {cpi_streak} consecutive months — inflation re-heating")
+
+    vix_streak = signals.get("VIXCLS", {}).get("streak", 0)
+    if vix_streak >= 3:
+        _vote("Contraction", f"VIX rising for {vix_streak} consecutive periods — fear building")
+
+    # ── Percentile-based extreme votes ──────────────────────────────
+    for sid_check in ["BAMLH0A0HYM2", "VIXCLS", "ICSA"]:
+        pctl = signals.get(sid_check, {}).get("percentile")
+        if pctl is not None and pctl >= 95:
+            _vote("Contraction", f"{signals[sid_check]['label']} at {pctl:.0f}th percentile — near extreme highs")
+
+    for sid_check in ["UMCSENT", "PAYEMS"]:
+        pctl = signals.get(sid_check, {}).get("percentile")
+        if pctl is not None and pctl <= 5:
+            _vote("Contraction", f"{signals[sid_check]['label']} at {pctl:.0f}th percentile — near extreme lows")
+
     if total == 0:
         return "Unknown", "#6b7280", 0.0, votes, []
 
@@ -400,6 +554,40 @@ def _get_vote_mapping(signals: dict[str, dict]) -> list[tuple[str, str]]:
         if z is not None and z > 1.5:
             _add("Slowdown", f"Fed funds rate elevated at {val:.2f}% ({z:+.1f}σ) — tight policy")
 
+    # Streak-based momentum votes
+    ur_streak = signals.get("UNRATE", {}).get("streak", 0)
+    if ur_streak >= 3:
+        _add("Contraction", f"Unemployment rising for {ur_streak} consecutive months — momentum deteriorating")
+    elif ur_streak <= -3:
+        _add("Expansion", f"Unemployment falling for {abs(ur_streak)} consecutive months — labor market strengthening")
+
+    nfp_streak = signals.get("PAYEMS", {}).get("streak", 0)
+    if nfp_streak <= -3:
+        _add("Contraction", f"Payrolls declining for {abs(nfp_streak)} consecutive months — hiring collapsing")
+
+    claims_streak = signals.get("ICSA", {}).get("streak", 0)
+    if claims_streak >= 4:
+        _add("Contraction", f"Jobless claims rising for {claims_streak} consecutive weeks — layoffs accelerating")
+
+    cpi_streak = signals.get("CPIAUCSL", {}).get("streak", 0)
+    if cpi_streak >= 4:
+        _add("Slowdown", f"CPI accelerating for {cpi_streak} consecutive months — inflation re-heating")
+
+    vix_streak = signals.get("VIXCLS", {}).get("streak", 0)
+    if vix_streak >= 3:
+        _add("Contraction", f"VIX rising for {vix_streak} consecutive periods — fear building")
+
+    # Percentile extremes
+    for sid_check in ["BAMLH0A0HYM2", "VIXCLS", "ICSA"]:
+        pctl = signals.get(sid_check, {}).get("percentile")
+        if pctl is not None and pctl >= 95:
+            _add("Contraction", f"{signals[sid_check].get('label', sid_check)} at {pctl:.0f}th percentile — near extreme highs")
+
+    for sid_check in ["UMCSENT", "PAYEMS"]:
+        pctl = signals.get(sid_check, {}).get("percentile")
+        if pctl is not None and pctl <= 5:
+            _add("Contraction", f"{signals[sid_check].get('label', sid_check)} at {pctl:.0f}th percentile — near extreme lows")
+
     return mapping
 
 
@@ -507,10 +695,24 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
         trend = _trend_direction(transform_series)
         date_str = str(monthly.index[-1].date())
 
+        # Compute streak, percentile, moving average comparisons
+        streak = _compute_streak(transform_series)
+        percentile = _compute_percentile(transform_series)
+        vs_3m = _vs_moving_avg(transform_series, 3)
+        vs_6m = _vs_moving_avg(transform_series, 6)
+        vs_12m = _vs_moving_avg(transform_series, 12)
+        previous = round(float(transform_series.iloc[-2]), 2) if len(transform_series) >= 2 else None
+
         signals[sid] = {
             "latest": round(latest, 2),
+            "previous": previous,
             "z_score": z,
             "trend": trend,
+            "streak": streak,
+            "percentile": percentile,
+            "vs_3m": vs_3m,
+            "vs_6m": vs_6m,
+            "vs_12m": vs_12m,
             "date": date_str,
             "series": monthly,
             "transform_series": transform_series,
@@ -669,7 +871,7 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
     st.markdown(
         f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
         f'These indicators have moved significantly from their 5-year average. '
-        f'Larger Z-scores mean more unusual readings. Hover any card for a plain-English explanation.</div>',
+        f'Cards show Z-score, percentile rank, consecutive streak, and moving-average position.</div>',
         unsafe_allow_html=True,
     )
 
@@ -680,50 +882,92 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
     movers.sort(key=lambda x: abs(x[1]["z_score"]), reverse=True)
 
     if movers:
-        cols = st.columns(min(4, len(movers)))
-        for i, (sid, data) in enumerate(movers[:8]):
-            with cols[i % min(4, len(movers))]:
-                z = data["z_score"]
-                zc = z_color(z)
-                cat_color = CATEGORY_COLORS.get(data["cat"], GRAY)
-                tc = trend_color(data["trend"], data["higher_is"])
-                ta = trend_arrow(data["trend"], data["higher_is"])
+        for i in range(0, min(8, len(movers)), 2):
+            row_cols = st.columns(2)
+            for j in range(2):
+                if i + j >= len(movers):
+                    break
+                sid, data = movers[i + j]
+                with row_cols[j]:
+                    z = data["z_score"]
+                    zc = z_color(z)
+                    cat_color = CATEGORY_COLORS.get(data["cat"], GRAY)
+                    tc = trend_color(data["trend"], data["higher_is"])
+                    ta = trend_arrow(data["trend"], data["higher_is"])
+                    mag, mag_color = _magnitude_label(z)
+                    streak = data.get("streak", 0)
+                    pctl = data.get("percentile")
+                    vs_3m = data.get("vs_3m")
+                    vs_12m = data.get("vs_12m")
 
-                az = abs(z)
-                if az >= 2.5:
-                    mag = "EXTREME"
-                    mag_explain = "Extremely rare reading"
-                elif az >= 1.5:
-                    mag = "HIGH"
-                    mag_explain = "Notably unusual"
-                else:
-                    mag = "MODERATE"
-                    mag_explain = "Somewhat elevated"
+                    # Streak badge
+                    streak_html = ""
+                    if abs(streak) >= 2:
+                        s_arrow = "▲" if streak > 0 else "▼"
+                        s_color = "#22c55e" if streak > 0 else "#ef4444"
+                        streak_html = (
+                            f'<span style="color:{s_color};font-size:0.72em;font-weight:700;'
+                            f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
+                            f'margin-left:4px">{s_arrow}{abs(streak)} STREAK</span>'
+                        )
 
-                # Build a plain-english explanation of the reading
-                explain = data.get("explain", "")
+                    # Percentile badge
+                    pctl_html = ""
+                    if pctl is not None:
+                        p_color = "#ef4444" if pctl >= 90 or pctl <= 10 else "#eab308" if pctl >= 75 or pctl <= 25 else TEXT_MUTED
+                        pctl_html = (
+                            f'<span style="color:{p_color};font-size:0.72em;font-weight:600;'
+                            f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
+                            f'margin-left:4px">P{pctl:.0f}</span>'
+                        )
 
-                st.markdown(
-                    f'<div style="background:linear-gradient(135deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015));'
-                    f'border:1px solid rgba(255,255,255,0.08);border-left:4px solid {zc};'
-                    f'border-radius:0 12px 12px 0;padding:14px 16px;margin-bottom:8px" '
-                    f'title="{explain}">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-                    f'{badge(data["cat"], cat_color)}'
-                    f'{badge(mag, zc)}'
-                    f'</div>'
-                    f'<div style="color:{TEXT_PRIMARY};font-weight:600;font-size:0.9em;margin:4px 0">'
-                    f'{data["label"]}</div>'
-                    f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
-                    f'<span style="color:{tc};font-size:1.4em;font-weight:700">'
-                    f'{ta} {data["latest"]:.2f}</span>'
-                    f'<span style="color:{zc};font-size:0.82em;font-weight:600">'
-                    f'{z:+.2f}σ</span>'
-                    f'</div>'
-                    f'<div style="color:{TEXT_DIM};font-size:0.68em;margin-top:4px">{data["date"]}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                    # MA position line
+                    ma_parts = []
+                    if vs_3m is not None and abs(vs_3m) > 1:
+                        ma_dir = "above" if vs_3m > 0 else "below"
+                        ma_parts.append(f"{ma_dir} 3m avg by {abs(vs_3m):.1f}%")
+                    if vs_12m is not None and abs(vs_12m) > 2:
+                        ma_dir = "above" if vs_12m > 0 else "below"
+                        ma_parts.append(f"{ma_dir} 12m avg by {abs(vs_12m):.1f}%")
+                    ma_html = ""
+                    if ma_parts:
+                        ma_html = (
+                            f'<div style="color:{TEXT_DIM};font-size:0.72em;margin-top:4px">'
+                            f'📊 {" · ".join(ma_parts)}</div>'
+                        )
+
+                    # Build narrative
+                    narrative = _build_narrative(data)
+                    narrative_html = ""
+                    if narrative:
+                        narrative_html = (
+                            f'<div style="color:{TEXT_SECONDARY};font-size:0.78em;line-height:1.5;'
+                            f'margin-top:8px;padding:8px 10px;background:rgba(255,255,255,0.02);'
+                            f'border-radius:6px;border-left:2px solid {zc}">{narrative}</div>'
+                        )
+
+                    st.markdown(
+                        f'<div style="background:linear-gradient(135deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015));'
+                        f'border:1px solid rgba(255,255,255,0.08);border-left:4px solid {zc};'
+                        f'border-radius:0 12px 12px 0;padding:14px 16px;margin-bottom:10px">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+                        f'<div>{badge(data["cat"], cat_color)}{badge(mag, mag_color)}</div>'
+                        f'<div>{streak_html}{pctl_html}</div>'
+                        f'</div>'
+                        f'<div style="color:{TEXT_PRIMARY};font-weight:600;font-size:0.92em;margin:4px 0">'
+                        f'{data["label"]}</div>'
+                        f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
+                        f'<span style="color:{tc};font-size:1.5em;font-weight:700">'
+                        f'{ta} {data["latest"]:.2f}</span>'
+                        f'<span style="color:{zc};font-size:0.88em;font-weight:700">'
+                        f'{z:+.2f}σ</span>'
+                        f'</div>'
+                        f'{ma_html}'
+                        f'{narrative_html}'
+                        f'<div style="color:{TEXT_DIM};font-size:0.68em;margin-top:6px">{data["date"]}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
     else:
         st.info("No significant movers detected — all indicators are near their historical averages.")
 
@@ -774,6 +1018,11 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
                 tc = trend_color(data["trend"], data["higher_is"])
                 ta = trend_arrow(data["trend"], data["higher_is"])
                 explain = data.get("explain", "")
+                streak = data.get("streak", 0)
+                pctl = data.get("percentile")
+                vs_3m = data.get("vs_3m")
+                vs_12m = data.get("vs_12m")
+                mag, mag_color = _magnitude_label(z)
 
                 col_metric, col_explain = st.columns([1, 2])
 
@@ -790,6 +1039,29 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
                         unsafe_allow_html=True,
                     )
 
+                    # Streak + percentile badges
+                    badge_row = ""
+                    if abs(streak) >= 2:
+                        s_arrow = "▲" if streak > 0 else "▼"
+                        s_color = "#22c55e" if streak > 0 else "#ef4444"
+                        badge_row += (
+                            f'<span style="color:{s_color};font-size:0.72em;font-weight:700;'
+                            f'padding:2px 5px;background:rgba(255,255,255,0.06);border-radius:4px;'
+                            f'margin-right:4px">{s_arrow}{abs(streak)} streak</span>'
+                        )
+                    if pctl is not None:
+                        p_color = "#ef4444" if pctl >= 90 or pctl <= 10 else "#eab308" if pctl >= 75 or pctl <= 25 else TEXT_MUTED
+                        badge_row += (
+                            f'<span style="color:{p_color};font-size:0.72em;font-weight:600;'
+                            f'padding:2px 5px;background:rgba(255,255,255,0.06);border-radius:4px">'
+                            f'P{pctl:.0f}</span>'
+                        )
+                    if badge_row:
+                        st.markdown(
+                            f'<div style="margin-top:2px">{badge_row}</div>',
+                            unsafe_allow_html=True,
+                        )
+
                 with col_explain:
                     # Plain-English explanation
                     trend_word = {
@@ -798,14 +1070,38 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
                         "stable": "holding steady",
                     }.get(data["trend"], "stable")
 
+                    # Build MA comparison line
+                    ma_info = ""
+                    ma_parts = []
+                    if vs_3m is not None and abs(vs_3m) > 1:
+                        ma_dir = "above" if vs_3m > 0 else "below"
+                        ma_parts.append(f"{ma_dir} 3m avg by {abs(vs_3m):.1f}%")
+                    if vs_12m is not None and abs(vs_12m) > 2:
+                        ma_dir = "above" if vs_12m > 0 else "below"
+                        ma_parts.append(f"{ma_dir} 12m avg by {abs(vs_12m):.1f}%")
+                    if ma_parts:
+                        ma_info = f' · 📊 {" · ".join(ma_parts)}'
+
+                    # Narrative sentence
+                    narrative = _build_narrative(data)
+
                     st.markdown(
                         f'<div style="color:{TEXT_SECONDARY};font-size:0.85em;line-height:1.5;'
                         f'padding-top:8px">{explain}</div>'
                         f'<div style="color:{TEXT_DIM};font-size:0.78em;margin-top:4px">'
-                        f'📈 Currently <b style="color:{tc}">{trend_word}</b> · '
+                        f'📈 Currently <b style="color:{tc}">{trend_word}</b>'
+                        f'{ma_info} · '
                         f'Updated: {data["date"]}</div>',
                         unsafe_allow_html=True,
                     )
+
+                    if narrative:
+                        st.markdown(
+                            f'<div style="color:{TEXT_SECONDARY};font-size:0.78em;line-height:1.5;'
+                            f'margin-top:6px;padding:6px 10px;background:rgba(255,255,255,0.02);'
+                            f'border-radius:6px;border-left:2px solid {bar_color}">{narrative}</div>',
+                            unsafe_allow_html=True,
+                        )
 
     # ── Z-SCORE OVERVIEW ──────────────────────────────────────────────────
     st.markdown(section_header("Z-Score Overview — How Unusual Are Current Readings?"), unsafe_allow_html=True)
