@@ -111,6 +111,20 @@ GDP, interest rates, etc.).
 
     all_features = list(panel.columns)
 
+    # Build human-readable name mapping: FRED code → plain name
+    code_to_name = {}
+    name_to_code = {}
+    for feat in all_features:
+        ind = INDICATORS.get(feat)
+        if ind:
+            display = ind.name
+        else:
+            display = feat
+        code_to_name[feat] = display
+        name_to_code[display] = feat
+
+    all_display_names = [code_to_name.get(f, f) for f in all_features]
+
     # Category descriptions for context
     cat_descriptions = {
         "Inflation": "**Prices & Cost of Living** — Is the purchasing power of your dollar shrinking? These indicators track price changes across the economy.",
@@ -143,13 +157,15 @@ GDP, interest rates, etc.).
             f'or click a category tab above to focus on a specific area of the economy.</div>',
             unsafe_allow_html=True,
         )
-        selected_features = st.multiselect(
-            "Filter features", all_features,
-            default=all_features[:12] if len(all_features) > 12 else all_features,
+        default_display = all_display_names[:12] if len(all_display_names) > 12 else all_display_names
+        selected_display = st.multiselect(
+            "Filter indicators", all_display_names,
+            default=default_display,
             key="feat_all",
         )
-        if selected_features:
-            _show_feature_table(panel, selected_features, INDICATORS, z_color, TEXT_MUTED)
+        if selected_display:
+            selected_codes = [name_to_code.get(n, n) for n in selected_display]
+            _show_feature_table(panel, selected_codes, INDICATORS, z_color, TEXT_MUTED, code_to_name)
 
     # Category tabs
     for tab, cat in zip(tabs[1:], cat_names):
@@ -191,7 +207,7 @@ GDP, interest rates, etc.).
                                     unsafe_allow_html=True,
                                 )
 
-            _show_feature_table(panel, cat_features, INDICATORS, z_color, TEXT_MUTED)
+            _show_feature_table(panel, cat_features, INDICATORS, z_color, TEXT_MUTED, code_to_name)
 
     # ── Feature chart ─────────────────────────────────────────────────────
     st.markdown(section_header("Chart Any Indicator"), unsafe_allow_html=True)
@@ -202,7 +218,8 @@ GDP, interest rates, etc.).
         unsafe_allow_html=True,
     )
 
-    chart_feature = st.selectbox("Select feature to chart", all_features, key="chart_pick")
+    chart_display = st.selectbox("Select indicator to chart", all_display_names, key="chart_pick")
+    chart_feature = name_to_code.get(chart_display, chart_display) if chart_display else None
     if chart_feature and "USA" in selected_countries:
         usa_data = panel.xs("USA", level="country") if "USA" in panel.index.get_level_values("country") else panel
         if chart_feature in usa_data.columns:
@@ -273,12 +290,17 @@ def _quick_z(series, window=60):
     return float((series.iloc[-1] - mean) / std)
 
 
-def _show_feature_table(panel, features, INDICATORS, z_color, TEXT_MUTED):
-    """Show filtered dataframe with feature data."""
+def _show_feature_table(panel, features, INDICATORS, z_color, TEXT_MUTED, code_to_name=None):
+    """Show filtered dataframe with human-readable column names."""
     valid = [f for f in features if f in panel.columns]
     if valid:
+        display_df = panel[valid].tail(60)
+        # Rename columns to human-readable names
+        if code_to_name:
+            rename_map = {c: code_to_name.get(c, c) for c in display_df.columns}
+            display_df = display_df.rename(columns=rename_map)
         st.dataframe(
-            panel[valid].tail(60),
+            display_df,
             use_container_width=True,
             height=400,
         )
