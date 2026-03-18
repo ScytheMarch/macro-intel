@@ -213,12 +213,23 @@ GDP, interest rates, etc.).
     st.markdown(section_header("Chart Any Indicator"), unsafe_allow_html=True)
     st.markdown(
         f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
-        f'Select any indicator below to see its full history. The dashed yellow line is the 12-month '
-        f'moving average — it smooths out noise to show the underlying trend.</div>',
+        f'Select any indicator and time period to see how it has moved. '
+        f'The dashed yellow line is a moving average that smooths out noise.</div>',
         unsafe_allow_html=True,
     )
 
-    chart_display = st.selectbox("Select indicator to chart", all_display_names, key="chart_pick")
+    chart_col1, chart_col2 = st.columns([3, 1])
+    with chart_col1:
+        chart_display = st.selectbox("Select indicator to chart", all_display_names, key="chart_pick")
+    with chart_col2:
+        chart_period = st.selectbox(
+            "Time period",
+            ["1W", "1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "10Y", "All"],
+            index=6,
+            key="chart_period",
+            help="How far back to look. 1W = 1 week, 1M = 1 month, 1Y = 1 year, etc.",
+        )
+
     chart_feature = name_to_code.get(chart_display, chart_display) if chart_display else None
     if chart_feature and "USA" in selected_countries:
         usa_data = panel.xs("USA", level="country") if "USA" in panel.index.get_level_values("country") else panel
@@ -236,36 +247,72 @@ GDP, interest rates, etc.).
                         unsafe_allow_html=True,
                     )
 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=series.index, y=series.values,
-                    mode="lines", name=title,
-                    line=dict(color="#818cf8", width=2),
-                    fill="tozeroy", fillcolor="rgba(129,140,248,0.08)",
-                ))
+                # Apply time period filter
+                import datetime as _dt
+                period_days = {
+                    "1W": 7, "1M": 30, "3M": 90, "6M": 180,
+                    "1Y": 365, "2Y": 730, "3Y": 1095, "5Y": 1825, "10Y": 3650,
+                }
+                if chart_period != "All" and chart_period in period_days:
+                    cutoff = series.index.max() - _dt.timedelta(days=period_days[chart_period])
+                    chart_series = series[series.index >= cutoff]
+                else:
+                    chart_series = series
 
-                # Add moving averages
-                if len(series) > 12:
-                    ma12 = series.rolling(12).mean()
+                if chart_series.empty:
+                    st.info("No data in this time period.")
+                else:
+                    # Summary stats for the selected period
+                    cs1, cs2, cs3, cs4 = st.columns(4)
+                    with cs1:
+                        st.metric("Latest", f"{chart_series.iloc[-1]:.2f}")
+                    with cs2:
+                        if len(chart_series) >= 2:
+                            change = chart_series.iloc[-1] - chart_series.iloc[0]
+                            st.metric("Change", f"{change:+.2f}")
+                        else:
+                            st.metric("Change", "N/A")
+                    with cs3:
+                        if len(chart_series) >= 2:
+                            pct_chg = (chart_series.iloc[-1] / chart_series.iloc[0] - 1) * 100 if chart_series.iloc[0] != 0 else 0
+                            st.metric("% Change", f"{pct_chg:+.1f}%")
+                        else:
+                            st.metric("% Change", "N/A")
+                    with cs4:
+                        st.metric("Data Points", f"{len(chart_series)}")
+
+                    fig = go.Figure()
                     fig.add_trace(go.Scatter(
-                        x=ma12.index, y=ma12.values,
-                        mode="lines", name="12mo Moving Average",
-                        line=dict(color="#f59e0b", width=1.5, dash="dash"),
+                        x=chart_series.index, y=chart_series.values,
+                        mode="lines", name=title,
+                        line=dict(color="#818cf8", width=2),
+                        fill="tozeroy", fillcolor="rgba(129,140,248,0.08)",
                     ))
 
-                fig.update_layout(
-                    title=dict(text=title, font=dict(size=14, color="#e2e8f0")),
-                    height=380,
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    font=dict(family="Inter", color="#94a3b8"),
-                    margin=dict(l=60, r=20, t=50, b=40),
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.04)"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.04)"),
-                    hovermode="x unified",
-                    hoverlabel=dict(bgcolor="#1e1b4b", font_size=11, bordercolor="#818cf8"),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                    # Add moving average appropriate to the time period
+                    ma_window = max(3, min(12, len(chart_series) // 4))
+                    if len(chart_series) > ma_window:
+                        ma = chart_series.rolling(ma_window).mean()
+                        ma_label = f"{ma_window}-period Moving Avg"
+                        fig.add_trace(go.Scatter(
+                            x=ma.index, y=ma.values,
+                            mode="lines", name=ma_label,
+                            line=dict(color="#f59e0b", width=1.5, dash="dash"),
+                        ))
+
+                    fig.update_layout(
+                        title=dict(text=f"{title} — {chart_period}", font=dict(size=14, color="#e2e8f0")),
+                        height=420,
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(family="Inter", color="#94a3b8"),
+                        margin=dict(l=60, r=20, t=50, b=40),
+                        xaxis=dict(gridcolor="rgba(255,255,255,0.04)"),
+                        yaxis=dict(gridcolor="rgba(255,255,255,0.04)"),
+                        hovermode="x unified",
+                        hoverlabel=dict(bgcolor="#1e1b4b", font_size=11, bordercolor="#818cf8"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
     # ── Download ──────────────────────────────────────────────────────────
     st.divider()

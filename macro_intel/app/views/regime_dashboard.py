@@ -1149,13 +1149,30 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
         st.plotly_chart(fig, use_container_width=True)
 
     # ── SPARKLINE TRENDS ──────────────────────────────────────────────────
-    st.markdown(section_header("Key Indicators — 3-Year Trend Lines"), unsafe_allow_html=True)
-    st.markdown(
-        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
-        f'Each mini-chart shows how an indicator has moved over the past 3 years. '
-        f'Look for trends: steady climbs, sharp drops, or reversals.</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(section_header("Key Indicators — Trend Lines"), unsafe_allow_html=True)
+
+    spark_period_col1, spark_period_col2 = st.columns([4, 1])
+    with spark_period_col1:
+        st.markdown(
+            f'<div style="color:{TEXT_DIM};font-size:0.82em">'
+            f'Each mini-chart shows how a key indicator has moved. '
+            f'Look for trends: steady climbs, sharp drops, or reversals.</div>',
+            unsafe_allow_html=True,
+        )
+    with spark_period_col2:
+        spark_period = st.selectbox(
+            "Period",
+            ["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "10Y"],
+            index=5,
+            key="spark_period",
+            help="How far back to look for trend lines",
+        )
+    import datetime as _dt
+    spark_period_months = {
+        "1M": 1, "3M": 3, "6M": 6, "1Y": 12,
+        "2Y": 24, "3Y": 36, "5Y": 60, "10Y": 120,
+    }
+    n_months = spark_period_months.get(spark_period, 36)
 
     spark_ids = ["UNRATE", "CPIAUCSL", "T10Y2Y", "VIXCLS", "FEDFUNDS", "INDPRO",
                  "BAMLH0A0HYM2", "UMCSENT", "ICSA"]
@@ -1166,8 +1183,8 @@ Expansions favor stocks. Slowdowns favor bonds. Crises favor cash and gold.
             continue
         data = signals[sid]
         series = data.get("transform_series", data["series"])
-        series = series.tail(36)
-        if len(series) < 3:
+        series = series.tail(n_months)
+        if len(series) < 2:
             continue
 
         with spark_cols[i % 3]:
