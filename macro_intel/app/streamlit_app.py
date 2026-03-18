@@ -1,4 +1,4 @@
-"""Streamlit dashboard for Macro-Intel."""
+"""Streamlit dashboard for Macro-Intel — Premium glass-on-dark theme."""
 
 from __future__ import annotations
 
@@ -13,11 +13,19 @@ st.set_page_config(
 
 
 def main():
-    # ── Sidebar navigation ───────────────────────────────────────────────
+    from macro_intel.app.styles import GLOBAL_CSS
+
+    # ── Inject premium CSS ────────────────────────────────────────────────
+    st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+
+    # ── Sidebar ───────────────────────────────────────────────────────────
     st.sidebar.markdown(
-        '<h2 style="margin:0;padding:0">🧠 Macro-Intel</h2>'
-        '<p style="color:#64748b;font-size:0.8em;margin-top:4px">'
-        'Probabilistic Macro Intelligence</p>',
+        '<div style="padding:8px 0">'
+        '<h2 style="margin:0;padding:0;font-weight:800;letter-spacing:-0.5px">'
+        '🧠 Macro-Intel</h2>'
+        '<p style="color:#64748b;font-size:0.78em;margin:4px 0 0 0;'
+        'letter-spacing:0.3px">Probabilistic Macro Intelligence</p>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -29,9 +37,37 @@ def main():
     )
 
     st.sidebar.divider()
-    st.sidebar.caption("Built with PyMC · PyVis · Evidently · OpenBB")
 
-    # ── Page routing ─────────────────────────────────────────────────────
+    # Sidebar data controls
+    from macro_intel.data import cache
+    test_date, test_val = cache.get_latest("UNRATE", "USA")
+    has_data = test_val is not None
+
+    if has_data:
+        st.sidebar.markdown(
+            '<div style="color:#64748b;font-size:0.72em;text-transform:uppercase;'
+            'letter-spacing:0.5px;margin-bottom:6px">Data Status</div>',
+            unsafe_allow_html=True,
+        )
+        st.sidebar.markdown(
+            f'<div style="color:#22c55e;font-size:0.8em">● Cache Active</div>'
+            f'<div style="color:#64748b;font-size:0.72em">Last: {test_date}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.sidebar.markdown(
+            '<div style="color:#ef4444;font-size:0.8em">● No Data Cached</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.sidebar.divider()
+    st.sidebar.caption(
+        '<div style="color:#475569;font-size:0.7em;letter-spacing:0.3px">'
+        'Built with PyMC · PyVis · Evidently · OpenBB</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Page routing ──────────────────────────────────────────────────────
     if page == "Regime Dashboard":
         from macro_intel.app.pages.regime_dashboard import render
         render()
