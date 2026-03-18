@@ -1,4 +1,4 @@
-"""Feature Panel — data matrix browser with significance metrics and charts."""
+"""Feature Panel — data matrix browser with significance metrics, charts, and educational context."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 def render():
     from macro_intel.app.styles import (
         glass_card, section_header, badge, metric_card, z_color,
-        CATEGORY_COLORS, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, GREEN, YELLOW, RED, GRAY,
+        CATEGORY_COLORS, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DIM, GREEN, YELLOW, RED, GRAY,
     )
     from macro_intel.data.feature_panel import build_panel, get_panel_summary, PanelConfig
     from macro_intel.config.countries import COUNTRIES
@@ -23,10 +23,30 @@ def render():
         '-webkit-background-clip:text;-webkit-text-fill-color:transparent">'
         'Feature Panel</span></h2>'
         f'<div style="color:{TEXT_MUTED};font-size:0.78em;letter-spacing:0.3px;'
-        f'margin-bottom:16px">Unified macro data matrix · '
-        f'MultiIndex (date, country)</div>',
+        f'margin-bottom:4px">Unified macro data matrix · '
+        f'All indicators in one place</div>',
         unsafe_allow_html=True,
     )
+
+    # Educational intro
+    with st.expander("ℹ️ What is the Feature Panel?", expanded=False):
+        st.markdown("""
+**Think of it as a spreadsheet of the entire economy.**
+
+This page organizes all 30+ economic indicators into a structured data table — like a giant Excel sheet
+where each row is a month and each column is a different economic measurement (unemployment, inflation,
+GDP, interest rates, etc.).
+
+**Why is this useful?**
+- **Spot patterns**: See how different parts of the economy move together or apart over time
+- **Track history**: View years of economic data at a glance
+- **Research**: Download the raw data for your own analysis
+- **Categories**: Browse by topic — Inflation, Labor, Output, Consumer, etc.
+
+**Reading the cards:**
+- Each indicator card shows the **latest value** and its **Z-score** (how unusual the reading is)
+- The colored bar under each card: 🟢 green = normal, 🟡 yellow = noteworthy, 🔴 red = extreme
+        """)
 
     # ── Check data ────────────────────────────────────────────────────────
     test_date, test_val = cache.get_latest("UNRATE", "USA")
@@ -67,11 +87,19 @@ def render():
     summary = get_panel_summary(panel)
 
     # ── Summary metrics ───────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin-bottom:10px">'
+        f'The panel below contains <b style="color:{TEXT_PRIMARY}">{summary["n_rows"]:,}</b> data points '
+        f'across <b style="color:{TEXT_PRIMARY}">{summary["n_features"]}</b> indicators '
+        f'for <b style="color:{TEXT_PRIMARY}">{len(summary["countries"])}</b> country/countries.</div>',
+        unsafe_allow_html=True,
+    )
+
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Rows", f"{summary['n_rows']:,}")
-    m2.metric("Features", summary['n_features'])
+    m1.metric("Data Points", f"{summary['n_rows']:,}")
+    m2.metric("Indicators", summary['n_features'])
     m3.metric("Countries", len(summary['countries']))
-    m4.metric("Missing", f"{summary.get('missing_pct', 0):.1f}%")
+    m4.metric("Missing Data", f"{summary.get('missing_pct', 0):.1f}%")
 
     if summary.get("date_range"):
         m5.metric("Date Range", f"{summary['date_range'][0][:7]} → {summary['date_range'][1][:7]}")
@@ -79,9 +107,23 @@ def render():
     st.markdown("", unsafe_allow_html=True)
 
     # ── Category tabs ─────────────────────────────────────────────────────
-    st.markdown(section_header("Feature Browser"), unsafe_allow_html=True)
+    st.markdown(section_header("Browse by Category"), unsafe_allow_html=True)
 
     all_features = list(panel.columns)
+
+    # Category descriptions for context
+    cat_descriptions = {
+        "Inflation": "**Prices & Cost of Living** — Is the purchasing power of your dollar shrinking? These indicators track price changes across the economy.",
+        "Labor": "**Jobs & Employment** — The heartbeat of the economy. Strong employment = consumers spend = businesses grow.",
+        "Output": "**Economic Production** — How much stuff is the economy actually making? GDP, factory output, and capacity.",
+        "Consumer": "**Spending & Confidence** — What are Americans buying and how do they feel? Consumer spending = 70% of GDP.",
+        "Monetary": "**Federal Reserve & Money** — The Fed's toolkit: interest rates and money supply. These drive everything else.",
+        "Fixed Income": "**Bonds & Yields** — Bond markets are smarter than stock markets. The yield curve has predicted every recession since 1970.",
+        "Market": "**Stocks & Volatility** — Fear, greed, and the VIX. Market indicators reflect real-time investor sentiment.",
+        "Housing": "**Real Estate** — Housing is a leading indicator. It turns down 6-12 months before recessions start.",
+        "Trade": "**International Trade** — How the US trades with the world. Trade deficits, exchange rates, and global flows.",
+        "Regime": "**Economic Cycle** — Official recession indicators from the National Bureau of Economic Research (NBER).",
+    }
 
     # Group features by category
     by_cat: dict[str, list[str]] = {}
@@ -95,6 +137,12 @@ def render():
 
     # All tab
     with tabs[0]:
+        st.markdown(
+            f'<div style="color:{TEXT_SECONDARY};font-size:0.85em;margin-bottom:12px">'
+            f'Showing all {len(all_features)} indicators. Use the filter below to narrow down, '
+            f'or click a category tab above to focus on a specific area of the economy.</div>',
+            unsafe_allow_html=True,
+        )
         selected_features = st.multiselect(
             "Filter features", all_features,
             default=all_features[:12] if len(all_features) > 12 else all_features,
@@ -106,6 +154,17 @@ def render():
     # Category tabs
     for tab, cat in zip(tabs[1:], cat_names):
         with tab:
+            # Category explanation
+            desc = cat_descriptions.get(cat, "")
+            if desc:
+                st.markdown(
+                    f'<div style="color:{TEXT_SECONDARY};font-size:0.88em;margin-bottom:14px;'
+                    f'padding:10px 14px;background:rgba(255,255,255,0.02);border-radius:8px;'
+                    f'border-left:3px solid {CATEGORY_COLORS.get(cat, GRAY)}">'
+                    f'{desc}</div>',
+                    unsafe_allow_html=True,
+                )
+
             cat_features = by_cat[cat]
             cat_color = CATEGORY_COLORS.get(cat, GRAY)
 
@@ -135,7 +194,13 @@ def render():
             _show_feature_table(panel, cat_features, INDICATORS, z_color, TEXT_MUTED)
 
     # ── Feature chart ─────────────────────────────────────────────────────
-    st.markdown(section_header("Feature Chart"), unsafe_allow_html=True)
+    st.markdown(section_header("Chart Any Indicator"), unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
+        f'Select any indicator below to see its full history. The dashed yellow line is the 12-month '
+        f'moving average — it smooths out noise to show the underlying trend.</div>',
+        unsafe_allow_html=True,
+    )
 
     chart_feature = st.selectbox("Select feature to chart", all_features, key="chart_pick")
     if chart_feature and "USA" in selected_countries:
@@ -145,6 +210,14 @@ def render():
             if not series.empty:
                 ind = INDICATORS.get(chart_feature)
                 title = ind.name if ind else chart_feature
+                desc = ind.description if ind else ""
+
+                if desc:
+                    st.markdown(
+                        f'<div style="color:{TEXT_SECONDARY};font-size:0.85em;margin-bottom:8px">'
+                        f'📖 {desc}</div>',
+                        unsafe_allow_html=True,
+                    )
 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
@@ -159,7 +232,7 @@ def render():
                     ma12 = series.rolling(12).mean()
                     fig.add_trace(go.Scatter(
                         x=ma12.index, y=ma12.values,
-                        mode="lines", name="12mo MA",
+                        mode="lines", name="12mo Moving Average",
                         line=dict(color="#f59e0b", width=1.5, dash="dash"),
                     ))
 
@@ -179,6 +252,11 @@ def render():
 
     # ── Download ──────────────────────────────────────────────────────────
     st.divider()
+    st.markdown(
+        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin-bottom:8px">'
+        f'📥 Download the full dataset as a CSV file for use in Excel, Python, R, or any spreadsheet tool.</div>',
+        unsafe_allow_html=True,
+    )
     csv = panel.to_csv()
     st.download_button("📥 Download Panel CSV", data=csv,
                        file_name="macro_intel_panel.csv", mime="text/csv")
