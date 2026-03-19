@@ -255,8 +255,11 @@ Labor markets weakening? Credit conditions tightening?
 
     else:
         # Show previous results if available
-        from macro_intel.monitoring.reports import get_latest_monitoring_report
-        report = get_latest_monitoring_report()
+        try:
+            from macro_intel.monitoring.reports import get_latest_monitoring_report
+            report = get_latest_monitoring_report()
+        except Exception:
+            report = None
 
         if report:
             st.markdown(
