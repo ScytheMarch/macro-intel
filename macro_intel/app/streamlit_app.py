@@ -31,8 +31,8 @@ def main():
 
     page = st.sidebar.radio(
         "Navigate",
-        ["Regime Dashboard", "Feature Panel", "Network Graphs",
-         "Drift Monitor", "Portfolio Bridge"],
+        ["Regime Dashboard", "Feature Panel", "Currency Monitor",
+         "Network Graphs", "Drift Monitor", "Portfolio Bridge"],
         label_visibility="collapsed",
     )
 
@@ -63,7 +63,7 @@ def main():
     st.sidebar.divider()
     st.sidebar.caption(
         '<div style="color:#475569;font-size:0.7em;letter-spacing:0.3px">'
-        'Built with PyMC · PyVis · Evidently · OpenBB</div>',
+        'Built with PyMC · PyVis · SciPy · OpenBB</div>',
         unsafe_allow_html=True,
     )
 
@@ -73,6 +73,9 @@ def main():
         render()
     elif page == "Feature Panel":
         from macro_intel.app.views.feature_panel_view import render
+        render()
+    elif page == "Currency Monitor":
+        from macro_intel.app.views.currency_view import render
         render()
     elif page == "Network Graphs":
         from macro_intel.app.views.network_view import render
