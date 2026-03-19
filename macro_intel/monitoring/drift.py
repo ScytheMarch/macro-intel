@@ -76,13 +76,26 @@ def compute_feature_drift(
         reference = data.loc[ref_start:cutoff].iloc[:-1]
         current = data.loc[cutoff:]
 
+    # Keep only numeric columns — Evidently can't handle strings/objects
+    numeric_cols = data.select_dtypes(include="number").columns.tolist()
+    data = data[numeric_cols]
+
+    # Recompute reference/current on numeric-only data
+    if len(dates) < total_months:
+        split_idx = int(len(data) * 0.7)
+        reference = data.iloc[:split_idx]
+        current = data.iloc[split_idx:]
+    else:
+        reference = data.loc[ref_start:cutoff].iloc[:-1]
+        current = data.loc[cutoff:]
+
     # Drop columns that are all NaN in either window
     valid_cols = [
         c for c in data.columns
         if reference[c].notna().sum() > 3 and current[c].notna().sum() > 1
     ]
-    reference = reference[valid_cols].fillna(method="ffill").dropna()
-    current = current[valid_cols].fillna(method="ffill").dropna()
+    reference = reference[valid_cols].ffill().dropna()
+    current = current[valid_cols].ffill().dropna()
 
     if reference.empty or current.empty:
         return DriftResult(False, 0, 0, 0.0, {})

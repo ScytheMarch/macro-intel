@@ -48,6 +48,12 @@ def check_data_quality(
     if data.empty:
         return QualityResult(0, 0, 0.0, [], {})
 
+    # Keep only numeric columns — Evidently can't handle strings/objects
+    data = data.select_dtypes(include="number")
+
+    if data.empty:
+        return QualityResult(0, 0, 0.0, [], {})
+
     # Reset index for Evidently
     data_reset = data.reset_index(drop=True)
 
