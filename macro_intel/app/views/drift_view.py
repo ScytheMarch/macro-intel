@@ -5,6 +5,13 @@ from __future__ import annotations
 import streamlit as st
 
 
+def _friendly_name(code: str) -> str:
+    """Convert FRED code to human-readable name."""
+    from macro_intel.config.indicators import INDICATORS
+    ind = INDICATORS.get(code)
+    return ind.name if ind else code
+
+
 def render():
     from macro_intel.app.styles import (
         glass_card, section_header, badge, metric_card,
@@ -170,12 +177,13 @@ Labor markets weakening? Credit conditions tightening?
                         key=lambda x: x[1].get("drift_score", 0), reverse=True,
                     )
 
-                    for feat_name, feat_data in sorted_feats[:20]:
+                    for feat_code, feat_data in sorted_feats[:20]:
                         drifted = feat_data.get("drifted", False)
                         score = feat_data.get("drift_score", 0)
                         shift = feat_data.get("shift_magnitude", 0)
                         icon = "🔴" if drifted else "🟢"
                         color = RED if drifted else GREEN
+                        display_name = _friendly_name(feat_code)
 
                         # Show shift direction
                         shift_text = ""
@@ -193,7 +201,7 @@ Labor markets weakening? Credit conditions tightening?
                             f'border-radius:8px;border-left:3px solid {color}">'
                             f'<span style="font-size:0.85em">{icon}</span>'
                             f'<span style="color:{TEXT_PRIMARY};font-size:0.85em;font-weight:500;'
-                            f'flex:1">{feat_name}{shift_text}</span>'
+                            f'flex:1">{display_name}{shift_text}</span>'
                             f'<span style="color:{TEXT_MUTED};font-size:0.78em">'
                             f'p={1.0 - score:.4f}</span>'
                             f'</div>',
@@ -241,10 +249,11 @@ Labor markets weakening? Credit conditions tightening?
                     )
 
                 if quality.columns_with_issues:
+                    friendly_issues = [_friendly_name(c) for c in quality.columns_with_issues[:10]]
                     st.markdown(
                         f'<div style="color:{YELLOW};font-size:0.85em;margin-top:12px">'
                         f'⚠️ <b>Indicators with issues:</b> '
-                        f'{", ".join(quality.columns_with_issues[:10])}'
+                        f'{", ".join(friendly_issues)}'
                         f'<br><span style="color:{TEXT_DIM};font-size:0.9em">'
                         f'These may have excessive missing data, zero variance, or stale values.</span></div>',
                         unsafe_allow_html=True,
