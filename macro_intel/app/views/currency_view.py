@@ -281,10 +281,25 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
 
     # ── Trend Analysis ───────────────────────────────────────────────
     st.markdown(section_header("Trend Analysis"), unsafe_allow_html=True)
+
+    with st.expander("ℹ️ What do RSI, P61, Vol, and Streak mean?", expanded=False):
+        st.markdown(f"""
+**Here's what each badge and number means in plain English:**
+
+| Badge | What it means | Example |
+|-------|-------------|---------|
+| **🟢 Bullish / 🔴 Bearish** | The overall direction the currency is trending. Bullish = going up, Bearish = going down. | 🟢 Bullish = price is in an uptrend |
+| **▲5 streak** | The price has moved in the **same direction** for 5 periods in a row. Longer streaks = stronger momentum. | ▲5 = rose 5 times in a row |
+| **RSI 59** | **Relative Strength Index** — measures if the price has been going up or down *too much*. Scale 0-100. **Below 30** = oversold (may bounce up). **Above 70** = overbought (may pull back). **30-70** = normal. | RSI 59 = normal, no extreme |
+| **Vol 10.1%** | **Volatility** — how wildly the price swings. Low (<8%) = calm. Medium (8-15%) = normal. High (>15%) = very choppy and risky. | Vol 10.1% = moderate swings |
+| **P61 of range** | **Percentile** — where the current price sits between its period low and high. P0 = at the bottom. P100 = at the top. **P61** = 61% of the way from the low to the high. | P97 = near the period high |
+| **Low / High bar** | The green-to-red bar shows the trading range. The **colored dot** is where the price is *right now* within that range. | Dot near the right = near highs |
+        """)
+
     st.markdown(
         f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
-        f'Technical trend signals for each currency pair — moving average crossovers, '
-        f'momentum, volatility, streaks, and support/resistance levels.</div>',
+        f'Each card shows the trend direction, momentum, and where the price sits in its range. '
+        f'<b>Expand the guide above</b> if any terms are unfamiliar.</div>',
         unsafe_allow_html=True,
     )
 
@@ -425,22 +440,32 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
                 f'margin-left:6px">{s_arrow}{abs(streak)} streak</span>'
             )
 
-        # RSI badge
+        # RSI badge — with human label
         rsi_html = ""
         if rsi_val is not None:
-            rsi_c = RED if rsi_val > 70 else GREEN if rsi_val < 30 else TEXT_MUTED
+            if rsi_val > 70:
+                rsi_c, rsi_word = RED, "Overbought"
+            elif rsi_val < 30:
+                rsi_c, rsi_word = GREEN, "Oversold"
+            else:
+                rsi_c, rsi_word = TEXT_MUTED, "Normal"
             rsi_html = (
                 f'<span style="color:{rsi_c};font-size:0.72em;font-weight:600;'
                 f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
-                f'margin-left:4px">RSI {rsi_val:.0f}</span>'
+                f'margin-left:4px">RSI {rsi_val:.0f} ({rsi_word})</span>'
             )
 
-        # Volatility badge
-        vol_c = RED if vol_ann > 15 else YELLOW if vol_ann > 8 else GREEN
+        # Volatility badge — with human label
+        if vol_ann > 15:
+            vol_c, vol_word = RED, "High"
+        elif vol_ann > 8:
+            vol_c, vol_word = YELLOW, "Moderate"
+        else:
+            vol_c, vol_word = GREEN, "Low"
         vol_html = (
             f'<span style="color:{vol_c};font-size:0.72em;font-weight:600;'
             f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
-            f'margin-left:4px">Vol {vol_ann:.1f}%</span>'
+            f'margin-left:4px">Volatility: {vol_word} ({vol_ann:.1f}%)</span>'
         )
 
         st.markdown(
@@ -458,7 +483,8 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
             f'<div>'
             f'<span style="color:{ma_color};font-weight:700;font-size:0.9em">{ma_signal}</span>'
             f'<span style="color:{TEXT_MUTED};font-size:0.82em;margin-left:8px">'
-            f'P{pctl:.0f} of range</span>'
+            f'{"Near period highs" if pctl >= 80 else "Near period lows" if pctl <= 20 else "Upper half of range" if pctl >= 50 else "Lower half of range"}'
+            f' (P{pctl:.0f})</span>'
             f'</div>'
             f'<div style="color:{TEXT_PRIMARY};font-size:1.1em;font-weight:600">{latest:.4f}</div>'
             f'</div>'
