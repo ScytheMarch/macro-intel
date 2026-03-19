@@ -1,15 +1,16 @@
-"""Feature and prediction drift detection using Evidently AI.
+"""Feature drift detection using scipy statistical tests.
 
 Compares reference (historical stable) data to current window
-for detecting distributional shifts in macro data and model outputs.
+for detecting distributional shifts in macro data.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -18,21 +19,22 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DriftConfig:
     """Configuration for drift analysis."""
-    reference_months: int = 12      # Size of reference window
-    current_months: int = 3         # Size of current window
-    country: str = "USA"            # Country to analyze
-    feature_families: dict[str, list[str]] | None = None  # Optional grouping
+    reference_months: int = 12
+    current_months: int = 3
+    country: str = "USA"
+    p_value_threshold: float = 0.05  # Below this = drift detected
+    feature_families: dict[str, list[str]] | None = None
 
 
 @dataclass
 class DriftResult:
     """Results from drift analysis."""
-    dataset_drift: bool             # Overall drift detected
+    dataset_drift: bool
     n_drifted_features: int
     n_total_features: int
-    drift_share: float              # Fraction of features drifted
-    feature_details: dict           # Per-feature drift scores
-    report_path: str | None = None  # Path to HTML report
+    drift_share: float
+    feature_details: dict = field(default_factory=dict)
+    report_path: str | None = None
 
 
 def compute_feature_drift(
@@ -40,12 +42,11 @@ def compute_feature_drift(
     config: DriftConfig | None = None,
     output_path: str | Path | None = None,
 ) -> DriftResult:
-    """Run Evidently data drift analysis on feature panel.
+    """Run statistical drift analysis using KS-test and t-test.
 
-    Splits panel into reference and current windows, runs DataDriftPreset.
+    Splits panel into reference and current windows, tests each feature.
     """
-    from evidently.report import Report
-    from evidently.metric_preset import DataDriftPreset
+    from scipy import stats
 
     if config is None:
         config = DriftConfig()
@@ -60,13 +61,16 @@ def compute_feature_drift(
     if data.empty:
         return DriftResult(False, 0, 0, 0.0, {})
 
+    # Keep only numeric columns
+    data = data.select_dtypes(include="number")
+    if data.empty:
+        return DriftResult(False, 0, 0, 0.0, {})
+
     # Split into reference and current
     dates = data.index.sort_values()
     total_months = config.reference_months + config.current_months
 
     if len(dates) < total_months:
-        logger.warning("Insufficient data for drift analysis (need %d months)", total_months)
-        # Use what we have: first 70% reference, last 30% current
         split_idx = int(len(data) * 0.7)
         reference = data.iloc[:split_idx]
         current = data.iloc[split_idx:]
@@ -76,73 +80,67 @@ def compute_feature_drift(
         reference = data.loc[ref_start:cutoff].iloc[:-1]
         current = data.loc[cutoff:]
 
-    # Keep only numeric columns — Evidently can't handle strings/objects
-    numeric_cols = data.select_dtypes(include="number").columns.tolist()
-    data = data[numeric_cols]
-
-    # Recompute reference/current on numeric-only data
-    if len(dates) < total_months:
-        split_idx = int(len(data) * 0.7)
-        reference = data.iloc[:split_idx]
-        current = data.iloc[split_idx:]
-    else:
-        reference = data.loc[ref_start:cutoff].iloc[:-1]
-        current = data.loc[cutoff:]
-
-    # Drop columns that are all NaN in either window
+    # Filter to columns with enough data
     valid_cols = [
         c for c in data.columns
         if reference[c].notna().sum() > 3 and current[c].notna().sum() > 1
     ]
-    reference = reference[valid_cols].ffill().dropna()
-    current = current[valid_cols].ffill().dropna()
 
-    if reference.empty or current.empty:
+    if not valid_cols:
         return DriftResult(False, 0, 0, 0.0, {})
 
-    # Reset index for Evidently (it expects numeric index)
-    reference = reference.reset_index(drop=True)
-    current = current.reset_index(drop=True)
-
-    # Run Evidently drift report
-    report = Report(metrics=[DataDriftPreset()])
-    report.run(reference_data=reference, current_data=current)
-
-    # Extract results
-    report_dict = report.as_dict()
-    metrics = report_dict.get("metrics", [])
-
-    dataset_drift = False
-    n_drifted = 0
+    # Run KS-test on each feature
     n_total = len(valid_cols)
+    n_drifted = 0
     feature_details = {}
 
-    for metric in metrics:
-        result_data = metric.get("result", {})
+    for col in valid_cols:
+        ref_vals = reference[col].dropna().values
+        cur_vals = current[col].dropna().values
 
-        if "dataset_drift" in result_data:
-            dataset_drift = result_data["dataset_drift"]
-            n_drifted = result_data.get("number_of_drifted_columns", 0)
+        if len(ref_vals) < 3 or len(cur_vals) < 1:
+            continue
 
-        if "drift_by_columns" in result_data:
-            for col_name, col_data in result_data["drift_by_columns"].items():
-                feature_details[col_name] = {
-                    "drifted": col_data.get("drift_detected", False),
-                    "drift_score": col_data.get("drift_score", 0.0),
-                    "stattest": col_data.get("stattest_name", ""),
-                    "threshold": col_data.get("stattest_threshold", 0.0),
-                }
+        # Kolmogorov-Smirnov test (distribution shift)
+        ks_stat, ks_p = stats.ks_2samp(ref_vals, cur_vals)
+
+        # Welch's t-test (mean shift)
+        if len(cur_vals) >= 2:
+            t_stat, t_p = stats.ttest_ind(ref_vals, cur_vals, equal_var=False)
+        else:
+            t_stat, t_p = 0.0, 1.0
+
+        # Drift detected if either test is significant
+        drifted = ks_p < config.p_value_threshold or t_p < config.p_value_threshold
+
+        # Drift score: combine both (lower p-value = higher drift score)
+        drift_score = 1.0 - min(ks_p, t_p)
+
+        if drifted:
+            n_drifted += 1
+
+        # Compute summary stats for context
+        ref_mean = float(np.nanmean(ref_vals))
+        cur_mean = float(np.nanmean(cur_vals))
+        ref_std = float(np.nanstd(ref_vals)) if len(ref_vals) > 1 else 0.0
+
+        feature_details[col] = {
+            "drifted": drifted,
+            "drift_score": round(drift_score, 4),
+            "ks_statistic": round(ks_stat, 4),
+            "ks_p_value": round(ks_p, 4),
+            "t_p_value": round(t_p, 4),
+            "stattest": "KS + Welch-t",
+            "threshold": config.p_value_threshold,
+            "ref_mean": round(ref_mean, 4),
+            "cur_mean": round(cur_mean, 4),
+            "shift_magnitude": round(
+                (cur_mean - ref_mean) / ref_std if ref_std > 0 else 0.0, 2
+            ),
+        }
 
     drift_share = n_drifted / n_total if n_total > 0 else 0.0
-
-    # Save HTML report
-    report_path = None
-    if output_path is not None:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        report.save_html(str(output_path))
-        report_path = str(output_path)
-        logger.info("Drift report saved to %s", report_path)
+    dataset_drift = drift_share > 0.25  # 25%+ features drifted = dataset drift
 
     return DriftResult(
         dataset_drift=dataset_drift,
@@ -150,7 +148,7 @@ def compute_feature_drift(
         n_total_features=n_total,
         drift_share=drift_share,
         feature_details=feature_details,
-        report_path=report_path,
+        report_path=None,
     )
 
 
@@ -159,59 +157,40 @@ def compute_prediction_drift(
     regime_probs_current: pd.DataFrame,
     output_path: str | Path | None = None,
 ) -> DriftResult:
-    """Run drift analysis on regime probability predictions.
-
-    Args:
-        regime_probs_reference: DataFrame with columns = regime names, reference window
-        regime_probs_current: DataFrame with columns = regime names, current window
-    """
-    from evidently.report import Report
-    from evidently.metric_preset import DataDriftPreset
+    """Run drift analysis on regime probability predictions."""
+    from scipy import stats
 
     if regime_probs_reference.empty or regime_probs_current.empty:
         return DriftResult(False, 0, 0, 0.0, {})
 
-    ref = regime_probs_reference.reset_index(drop=True)
-    cur = regime_probs_current.reset_index(drop=True)
-
-    report = Report(metrics=[DataDriftPreset()])
-    report.run(reference_data=ref, current_data=cur)
-
-    report_dict = report.as_dict()
-    metrics = report_dict.get("metrics", [])
-
-    dataset_drift = False
+    n_total = len(regime_probs_reference.columns)
     n_drifted = 0
     feature_details = {}
 
-    for metric in metrics:
-        result_data = metric.get("result", {})
-        if "dataset_drift" in result_data:
-            dataset_drift = result_data["dataset_drift"]
-            n_drifted = result_data.get("number_of_drifted_columns", 0)
+    for col in regime_probs_reference.columns:
+        if col not in regime_probs_current.columns:
+            continue
+        ref_vals = regime_probs_reference[col].dropna().values
+        cur_vals = regime_probs_current[col].dropna().values
+        if len(ref_vals) < 3 or len(cur_vals) < 1:
+            continue
 
-        if "drift_by_columns" in result_data:
-            for col_name, col_data in result_data["drift_by_columns"].items():
-                feature_details[col_name] = {
-                    "drifted": col_data.get("drift_detected", False),
-                    "drift_score": col_data.get("drift_score", 0.0),
-                }
+        ks_stat, ks_p = stats.ks_2samp(ref_vals, cur_vals)
+        drifted = ks_p < 0.05
+        if drifted:
+            n_drifted += 1
+        feature_details[col] = {
+            "drifted": drifted,
+            "drift_score": round(1.0 - ks_p, 4),
+        }
 
-    n_total = len(regime_probs_reference.columns)
     drift_share = n_drifted / n_total if n_total > 0 else 0.0
 
-    report_path = None
-    if output_path is not None:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        report.save_html(str(output_path))
-        report_path = str(output_path)
-
     return DriftResult(
-        dataset_drift=dataset_drift,
+        dataset_drift=drift_share > 0.25,
         n_drifted_features=n_drifted,
         n_total_features=n_total,
         drift_share=drift_share,
         feature_details=feature_details,
-        report_path=report_path,
+        report_path=None,
     )

@@ -90,17 +90,13 @@ Labor markets weakening? Credit conditions tightening?
         with st.spinner("Running statistical drift detection..."):
             try:
                 from macro_intel.monitoring.drift import compute_feature_drift, DriftConfig
-                from macro_intel.config.settings import settings
 
                 drift_config = DriftConfig(
                     reference_months=ref_months,
                     current_months=cur_months,
                     country=country,
                 )
-                drift_result = compute_feature_drift(
-                    panel, drift_config,
-                    output_path=settings.reports_dir / f"drift_{country}.html",
-                )
+                drift_result = compute_feature_drift(panel, drift_config)
 
                 # Results cards
                 d1, d2, d3 = st.columns(3)
@@ -177,8 +173,18 @@ Labor markets weakening? Credit conditions tightening?
                     for feat_name, feat_data in sorted_feats[:20]:
                         drifted = feat_data.get("drifted", False)
                         score = feat_data.get("drift_score", 0)
+                        shift = feat_data.get("shift_magnitude", 0)
                         icon = "🔴" if drifted else "🟢"
                         color = RED if drifted else GREEN
+
+                        # Show shift direction
+                        shift_text = ""
+                        if shift != 0:
+                            shift_dir = "↑" if shift > 0 else "↓"
+                            shift_text = (
+                                f'<span style="color:{TEXT_DIM};font-size:0.75em;margin-left:8px">'
+                                f'{shift_dir}{abs(shift):.1f}σ shift</span>'
+                            )
 
                         st.markdown(
                             f'<div style="display:flex;align-items:center;gap:8px;'
@@ -187,22 +193,13 @@ Labor markets weakening? Credit conditions tightening?
                             f'border-radius:8px;border-left:3px solid {color}">'
                             f'<span style="font-size:0.85em">{icon}</span>'
                             f'<span style="color:{TEXT_PRIMARY};font-size:0.85em;font-weight:500;'
-                            f'flex:1">{feat_name}</span>'
+                            f'flex:1">{feat_name}{shift_text}</span>'
                             f'<span style="color:{TEXT_MUTED};font-size:0.78em">'
-                            f'drift score: {score:.4f}</span>'
+                            f'p={1.0 - score:.4f}</span>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
 
-                # Embed HTML report
-                if drift_result.report_path:
-                    with st.expander("📄 Full Evidently Drift Report (Advanced)", expanded=False):
-                        from pathlib import Path
-                        html = Path(drift_result.report_path).read_text(encoding="utf-8")
-                        st.components.v1.html(html, height=800, scrolling=True)
-
-            except ImportError:
-                st.error("Evidently not installed. Install with: `pip install evidently`")
             except Exception as e:
                 st.error(f"Drift analysis failed: {e}")
 
@@ -218,12 +215,8 @@ Labor markets weakening? Credit conditions tightening?
         with st.spinner("Running quality checks..."):
             try:
                 from macro_intel.monitoring.data_quality import check_data_quality
-                from macro_intel.config.settings import settings
 
-                quality = check_data_quality(
-                    panel, country=country,
-                    output_path=settings.reports_dir / f"quality_{country}.html",
-                )
+                quality = check_data_quality(panel, country=country)
 
                 q1, q2, q3 = st.columns(3)
                 with q1:
@@ -257,14 +250,6 @@ Labor markets weakening? Credit conditions tightening?
                         unsafe_allow_html=True,
                     )
 
-                if quality.report_path:
-                    with st.expander("📄 Full Quality Report (Advanced)", expanded=False):
-                        from pathlib import Path
-                        html = Path(quality.report_path).read_text(encoding="utf-8")
-                        st.components.v1.html(html, height=800, scrolling=True)
-
-            except ImportError:
-                st.error("Evidently not installed.")
             except Exception as e:
                 st.error(f"Quality check failed: {e}")
 

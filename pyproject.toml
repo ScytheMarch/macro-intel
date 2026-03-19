@@ -31,9 +31,6 @@ dependencies = [
     "pyvis>=0.3.2",
     "networkx>=3.1",
 
-    # Monitoring
-    "evidently>=0.4.0",
-
     # UI & CLI
     "streamlit>=1.28.0",
     "plotly>=5.17.0",
