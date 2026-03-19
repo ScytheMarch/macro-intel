@@ -279,6 +279,207 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
                     unsafe_allow_html=True,
                 )
 
+    # ── Trend Analysis ───────────────────────────────────────────────
+    st.markdown(section_header("Trend Analysis"), unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
+        f'Technical trend signals for each currency pair — moving average crossovers, '
+        f'momentum, volatility, streaks, and support/resistance levels.</div>',
+        unsafe_allow_html=True,
+    )
+
+    for ticker, pdata in pair_data.items():
+        series = pdata["series"]
+        label = pdata["label"]
+        meta = FOREX_PAIRS.get(ticker, {})
+
+        if len(series) < 5:
+            continue
+
+        # ── Compute trend metrics ────────────────────────────────────
+        latest = float(series.iloc[-1])
+
+        # Moving averages
+        ma_short_w = max(3, len(series) // 10)
+        ma_long_w = max(6, len(series) // 4)
+        ma_short = series.rolling(ma_short_w).mean()
+        ma_long = series.rolling(ma_long_w).mean()
+        ma_short_val = float(ma_short.iloc[-1]) if not np.isnan(ma_short.iloc[-1]) else latest
+        ma_long_val = float(ma_long.iloc[-1]) if len(series) >= ma_long_w and not np.isnan(ma_long.iloc[-1]) else latest
+
+        above_short = latest > ma_short_val
+        above_long = latest > ma_long_val
+        short_above_long = ma_short_val > ma_long_val
+
+        # MA signal
+        if above_short and above_long and short_above_long:
+            ma_signal = "Bullish"
+            ma_color = GREEN
+            ma_icon = "🟢"
+            ma_explain = f"Price is above both short ({ma_short_w}-period) and long ({ma_long_w}-period) moving averages, and the short MA is above the long MA — a strong uptrend."
+        elif not above_short and not above_long and not short_above_long:
+            ma_signal = "Bearish"
+            ma_color = RED
+            ma_icon = "🔴"
+            ma_explain = f"Price is below both moving averages, and the short MA is below the long MA — a strong downtrend."
+        elif short_above_long:
+            ma_signal = "Weakening Bullish"
+            ma_color = YELLOW
+            ma_icon = "🟡"
+            ma_explain = f"Short MA is still above long MA but price is pulling back — the uptrend may be losing steam."
+        else:
+            ma_signal = "Weakening Bearish"
+            ma_color = YELLOW
+            ma_icon = "🟡"
+            ma_explain = f"Short MA is below long MA but price is bouncing — the downtrend may be fading."
+
+        # Consecutive streak
+        diffs = series.diff().dropna()
+        streak = 0
+        if len(diffs) > 0:
+            last_sign = 1 if diffs.iloc[-1] > 0 else -1
+            for val in reversed(diffs.values):
+                if (val > 0 and last_sign > 0) or (val < 0 and last_sign < 0):
+                    streak += last_sign
+                else:
+                    break
+
+        # Volatility (annualized from returns)
+        returns = series.pct_change().dropna()
+        if len(returns) > 5:
+            daily_vol = float(returns.std())
+            # Rough annualization based on interval
+            ann_factor = {"5m": np.sqrt(252 * 78), "15m": np.sqrt(252 * 26),
+                          "1d": np.sqrt(252), "1wk": np.sqrt(52), "1mo": np.sqrt(12)}
+            vol_ann = daily_vol * ann_factor.get(interval, np.sqrt(252)) * 100
+        else:
+            vol_ann = 0
+
+        # Percentile rank
+        if len(series) >= 10:
+            pctl = float((series < latest).sum() / len(series) * 100)
+        else:
+            pctl = 50.0
+
+        # Support / resistance (period low / high)
+        period_high = float(series.max())
+        period_low = float(series.min())
+        range_pct = ((period_high - period_low) / period_low * 100) if period_low != 0 else 0
+        from_high_pct = ((latest - period_high) / period_high * 100) if period_high != 0 else 0
+        from_low_pct = ((latest - period_low) / period_low * 100) if period_low != 0 else 0
+
+        # RSI (14-period)
+        rsi_val = None
+        if len(returns) >= 14:
+            gains = returns.clip(lower=0).rolling(14).mean()
+            losses = (-returns.clip(upper=0)).rolling(14).mean()
+            if losses.iloc[-1] != 0:
+                rs = gains.iloc[-1] / losses.iloc[-1]
+                rsi_val = 100 - (100 / (1 + rs))
+
+        # ── Build narrative ──────────────────────────────────────────
+        parts = []
+        # Trend direction
+        if pdata["pct_change"] > 0:
+            parts.append(f"{label} has **risen {pdata['pct_change']:.2f}%** over this period.")
+        elif pdata["pct_change"] < 0:
+            parts.append(f"{label} has **fallen {abs(pdata['pct_change']):.2f}%** over this period.")
+        else:
+            parts.append(f"{label} is **flat** over this period.")
+
+        # MA context
+        parts.append(f"Trend signal: **{ma_signal}** — {ma_explain}")
+
+        # Streak
+        if abs(streak) >= 2:
+            streak_dir = "consecutive gains" if streak > 0 else "consecutive declines"
+            parts.append(f"Currently on a **{abs(streak)} {streak_dir}** streak.")
+
+        # RSI
+        if rsi_val is not None:
+            if rsi_val > 70:
+                parts.append(f"RSI at **{rsi_val:.0f}** — overbought territory, could be due for a pullback.")
+            elif rsi_val < 30:
+                parts.append(f"RSI at **{rsi_val:.0f}** — oversold territory, could be due for a bounce.")
+            else:
+                parts.append(f"RSI at **{rsi_val:.0f}** — neutral range.")
+
+        # Position in range
+        parts.append(
+            f"Trading at the **{pctl:.0f}th percentile** of its range. "
+            f"Period high: {period_high:.4f} ({from_high_pct:+.2f}% away), "
+            f"low: {period_low:.4f} ({from_low_pct:+.2f}% above)."
+        )
+
+        narrative = " ".join(parts)
+
+        # ── Render card ──────────────────────────────────────────────
+        # Streak badge
+        streak_html = ""
+        if abs(streak) >= 2:
+            s_arrow = "▲" if streak > 0 else "▼"
+            s_color = GREEN if streak > 0 else RED
+            streak_html = (
+                f'<span style="color:{s_color};font-size:0.72em;font-weight:700;'
+                f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
+                f'margin-left:6px">{s_arrow}{abs(streak)} streak</span>'
+            )
+
+        # RSI badge
+        rsi_html = ""
+        if rsi_val is not None:
+            rsi_c = RED if rsi_val > 70 else GREEN if rsi_val < 30 else TEXT_MUTED
+            rsi_html = (
+                f'<span style="color:{rsi_c};font-size:0.72em;font-weight:600;'
+                f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
+                f'margin-left:4px">RSI {rsi_val:.0f}</span>'
+            )
+
+        # Volatility badge
+        vol_c = RED if vol_ann > 15 else YELLOW if vol_ann > 8 else GREEN
+        vol_html = (
+            f'<span style="color:{vol_c};font-size:0.72em;font-weight:600;'
+            f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
+            f'margin-left:4px">Vol {vol_ann:.1f}%</span>'
+        )
+
+        st.markdown(
+            f'<div style="background:linear-gradient(135deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015));'
+            f'border:1px solid rgba(255,255,255,0.08);border-left:4px solid {ma_color};'
+            f'border-radius:0 12px 12px 0;padding:16px 18px;margin-bottom:12px">'
+            # Header row
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+            f'<div style="color:{TEXT_PRIMARY};font-weight:700;font-size:1em">'
+            f'{ma_icon} {label}</div>'
+            f'<div>{streak_html}{rsi_html}{vol_html}</div>'
+            f'</div>'
+            # Signal + price row
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+            f'<div>'
+            f'<span style="color:{ma_color};font-weight:700;font-size:0.9em">{ma_signal}</span>'
+            f'<span style="color:{TEXT_MUTED};font-size:0.82em;margin-left:8px">'
+            f'P{pctl:.0f} of range</span>'
+            f'</div>'
+            f'<div style="color:{TEXT_PRIMARY};font-size:1.1em;font-weight:600">{latest:.4f}</div>'
+            f'</div>'
+            # Support / resistance bar
+            f'<div style="display:flex;gap:12px;align-items:center;margin-bottom:10px">'
+            f'<span style="color:{GREEN};font-size:0.72em">Low: {period_low:.4f}</span>'
+            f'<div style="flex:1;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;position:relative">'
+            f'<div style="position:absolute;left:{max(1, min(99, pctl))}%;top:-3px;'
+            f'width:12px;height:12px;background:{ma_color};border-radius:50%;'
+            f'transform:translateX(-50%);border:2px solid rgba(0,0,0,0.3)"></div>'
+            f'</div>'
+            f'<span style="color:{RED};font-size:0.72em">High: {period_high:.4f}</span>'
+            f'</div>'
+            # Narrative
+            f'<div style="color:{TEXT_SECONDARY};font-size:0.8em;line-height:1.6;'
+            f'padding:10px 12px;background:rgba(255,255,255,0.02);border-radius:8px">'
+            f'{narrative}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
     # ── Correlation Matrix ───────────────────────────────────────────
     if len(pair_data) >= 3:
         st.markdown(section_header("Currency Correlations"), unsafe_allow_html=True)
