@@ -220,6 +220,19 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
         st.warning("No data available for selected pairs.")
         return
 
+    # ── What This Means — Country Impact Summary ─────────────────────
+    st.markdown(section_header("What This Means For Each Economy"), unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
+        f'Based on the currency moves above, here\'s the real-world impact '
+        f'on each country\'s economy, trade, and markets.</div>',
+        unsafe_allow_html=True,
+    )
+
+    _render_country_impacts(pair_data, FOREX_PAIRS, glass_card,
+                            TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DIM,
+                            GREEN, RED, YELLOW, GRAY)
+
     # ── Price Charts ─────────────────────────────────────────────────
     st.markdown(section_header("Price Charts"), unsafe_allow_html=True)
     st.markdown(
@@ -540,7 +553,7 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
                 xaxis=dict(tickangle=45, tickfont=dict(size=10)),
                 yaxis=dict(tickfont=dict(size=10)),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="fx_corr_heatmap")
 
     # ── Performance Comparison Bar ───────────────────────────────────
     if len(pair_data) >= 2:
@@ -574,4 +587,263 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
                        zeroline=True, zerolinecolor="rgba(255,255,255,0.15)"),
             yaxis=dict(autorange="reversed"),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="fx_perf_chart")
+
+
+# ── Country Impact Data ──────────────────────────────────────────────────
+COUNTRY_IMPACTS = {
+    "DX-Y.NYB": {
+        "flag": "🇺🇸", "country": "United States",
+        "up": [
+            "US imports become cheaper — lower prices on foreign goods",
+            "US exports become less competitive abroad — hurts manufacturers",
+            "Emerging markets feel pressure — their dollar debts get more expensive",
+            "Commodity prices (oil, gold) tend to fall when the dollar rises",
+            "Foreign earnings of US companies shrink when converted back to dollars",
+        ],
+        "down": [
+            "US exports become more competitive — helps manufacturers and agriculture",
+            "Import prices rise — can fuel inflation at home",
+            "Emerging markets get relief — easier to service dollar-denominated debt",
+            "Commodity prices tend to rise — good for producers, bad for consumers",
+            "Foreign earnings of US companies get a boost when converted back",
+        ],
+    },
+    "EURUSD=X": {
+        "flag": "🇪🇺", "country": "Eurozone",
+        "up": [
+            "Euro strengthening — European exports become more expensive globally",
+            "Imports into Europe get cheaper — helps consumers, hurts local producers",
+            "ECB may be less inclined to tighten if strong euro acts as drag on growth",
+            "European tourists get more purchasing power abroad",
+        ],
+        "down": [
+            "Euro weakening — European exports become more competitive globally",
+            "Import costs rise in Europe — energy and commodity bills increase",
+            "ECB under pressure as weaker euro can fuel imported inflation",
+            "Capital may be flowing out of Europe toward US assets",
+        ],
+    },
+    "USDJPY=X": {
+        "flag": "🇯🇵", "country": "Japan",
+        "up": [
+            "Yen weakening — Japanese exports become more competitive",
+            "Import costs surge for Japan (oil, food, raw materials all priced in dollars)",
+            "Bank of Japan under pressure to intervene if yen falls too fast",
+            "Japanese investors may face losses on domestic assets valued in yen terms",
+            "Good for Japanese exporters like Toyota, Sony — their overseas earnings rise",
+        ],
+        "down": [
+            "Yen strengthening — often signals global risk-off / investors seeking safety",
+            "Japanese exports become less competitive abroad",
+            "Import costs fall — relief for Japanese consumers and energy importers",
+            "Carry trade unwinding — investors closing yen-funded positions globally",
+        ],
+    },
+    "GBPUSD=X": {
+        "flag": "🇬🇧", "country": "United Kingdom",
+        "up": [
+            "Pound strengthening — UK imports become cheaper",
+            "UK exports become less competitive — pressure on manufacturers",
+            "Signal of confidence in UK economy or expectations of BoE tightening",
+            "London financial assets become more attractive to foreign investors",
+        ],
+        "down": [
+            "Pound weakening — UK exports become more competitive",
+            "Import costs rise — UK imports most of its food and energy",
+            "Could signal concerns about UK economic outlook or political uncertainty",
+            "Inflation pressure from rising import costs",
+        ],
+    },
+    "USDCHF=X": {
+        "flag": "🇨🇭", "country": "Switzerland",
+        "up": [
+            "Franc weakening vs dollar — Swiss exports become more competitive",
+            "Swiss National Bank may welcome this as strong franc hurts exporters",
+            "Signal of risk-on sentiment — money moving away from safe-haven franc",
+        ],
+        "down": [
+            "Franc strengthening — classic safe-haven move during global uncertainty",
+            "Swiss exports become less competitive — hurts watchmakers, pharma",
+            "SNB may intervene to prevent excessive franc appreciation",
+        ],
+    },
+    "AUDUSD=X": {
+        "flag": "🇦🇺", "country": "Australia",
+        "up": [
+            "Aussie dollar strengthening — usually signals strong global growth and commodity demand",
+            "Iron ore and mining exports are doing well",
+            "Chinese economy likely growing — Australia's biggest trade partner",
+            "Risk-on sentiment globally",
+        ],
+        "down": [
+            "Aussie dollar weakening — signals concerns about global growth",
+            "Commodity demand likely falling — bad for mining sector",
+            "Possible slowdown in China dragging down Australian trade",
+            "RBA may need to cut rates to support the economy",
+        ],
+    },
+    "USDCAD=X": {
+        "flag": "🇨🇦", "country": "Canada",
+        "up": [
+            "Canadian dollar weakening — could signal falling oil prices",
+            "Canadian exports become more competitive in US market",
+            "Imports from the US become more expensive for Canadian consumers",
+            "Bank of Canada may be cutting rates faster than the Fed",
+        ],
+        "down": [
+            "Canadian dollar strengthening — often driven by rising oil prices",
+            "Energy sector doing well — boosts Canadian government revenue",
+            "Canadian imports from US become cheaper",
+            "Signal of commodity-driven economic strength",
+        ],
+    },
+    "NZDUSD=X": {
+        "flag": "🇳🇿", "country": "New Zealand",
+        "up": [
+            "Kiwi dollar strengthening — signals strong dairy demand and global risk appetite",
+            "New Zealand exports becoming less competitive but imports cheaper",
+            "Chinese demand for NZ agricultural products likely strong",
+        ],
+        "down": [
+            "Kiwi dollar weakening — global risk-off or falling commodity prices",
+            "NZ exports become more competitive but import costs rise",
+            "RBNZ may need to adjust policy to support the currency",
+        ],
+    },
+    "USDCNY=X": {
+        "flag": "🇨🇳", "country": "China",
+        "up": [
+            "Yuan weakening — Chinese exports become cheaper globally",
+            "Could signal capital outflows from China or deliberate PBOC policy",
+            "Trade tensions may be escalating if yuan drops sharply",
+            "Makes Chinese imports more expensive — hurts domestic consumers",
+            "Pressure on other Asian currencies to weaken in response",
+        ],
+        "down": [
+            "Yuan strengthening — signal of confidence in Chinese economy",
+            "Chinese imports become cheaper — helps domestic consumption",
+            "PBOC may be tightening or allowing appreciation to fight inflation",
+            "Reduces pressure on other emerging market currencies",
+        ],
+    },
+    "USDINR=X": {
+        "flag": "🇮🇳", "country": "India",
+        "up": [
+            "Rupee weakening — India's massive oil import bill gets more expensive",
+            "IT services exports become more competitive (revenue in dollars)",
+            "Inflationary pressure from costlier imports",
+            "RBI may intervene to slow depreciation",
+        ],
+        "down": [
+            "Rupee strengthening — oil and import costs fall for India",
+            "Signal of strong foreign investment inflows into India",
+            "Helps control inflation through cheaper imports",
+            "Indian consumers benefit from cheaper foreign goods",
+        ],
+    },
+    "USDMXN=X": {
+        "flag": "🇲🇽", "country": "Mexico",
+        "up": [
+            "Peso weakening — Mexican exports and manufacturing become cheaper for US buyers",
+            "Remittances from US workers buy more in Mexico",
+            "Could signal political uncertainty or trade policy concerns",
+            "Import costs rise — inflationary for Mexican consumers",
+        ],
+        "down": [
+            "Peso strengthening — often due to high carry trade appeal (high interest rates)",
+            "Signal of strong nearshoring trend — factories moving to Mexico",
+            "Mexican imports become cheaper — helps consumers",
+            "Confidence in Mexico's economic outlook and trade relationships",
+        ],
+    },
+    "USDBRL=X": {
+        "flag": "🇧🇷", "country": "Brazil",
+        "up": [
+            "Real weakening — Brazilian commodity exports become cheaper globally",
+            "Could signal political uncertainty or fiscal concerns",
+            "Import costs surge — inflationary for Brazilian consumers",
+            "Central bank may need to raise rates to defend the currency",
+        ],
+        "down": [
+            "Real strengthening — commodity prices likely rising",
+            "Foreign investors attracted by high Brazilian interest rates",
+            "Signal of fiscal discipline and political stability",
+            "Cheaper imports help Brazilian consumers and businesses",
+        ],
+    },
+}
+
+
+def _render_country_impacts(pair_data, forex_pairs, glass_card,
+                            TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DIM,
+                            GREEN, RED, YELLOW, GRAY):
+    """Render country-by-country impact summaries based on currency moves."""
+    cols = st.columns(2)
+    idx = 0
+
+    for ticker, pdata in pair_data.items():
+        impact_info = COUNTRY_IMPACTS.get(ticker)
+        if not impact_info:
+            continue
+
+        pct = pdata["pct_change"]
+        abs_pct = abs(pct)
+
+        # Magnitude label
+        if abs_pct >= 2:
+            magnitude = "Major"
+            mag_color = RED if pct < 0 else GREEN
+        elif abs_pct >= 1:
+            magnitude = "Significant"
+            mag_color = RED if pct < 0 else GREEN
+        elif abs_pct >= 0.3:
+            magnitude = "Moderate"
+            mag_color = YELLOW
+        else:
+            magnitude = "Slight"
+            mag_color = TEXT_MUTED
+
+        direction = "up" if pct >= 0 else "down"
+        arrow = "▲" if pct >= 0 else "▼"
+        arrow_color = GREEN if pct >= 0 else RED
+        impacts = impact_info.get(direction, [])
+
+        # Build bullet HTML
+        bullet_html = ""
+        for bullet in impacts:
+            bullet_html += (
+                f'<div style="color:{TEXT_SECONDARY};font-size:0.8em;line-height:1.5;'
+                f'padding:2px 0 2px 16px;position:relative">'
+                f'<span style="position:absolute;left:0;color:{TEXT_DIM}">•</span>'
+                f'{bullet}</div>'
+            )
+
+        card_html = (
+            f'<div style="background:linear-gradient(135deg,rgba(255,255,255,0.04),'
+            f'rgba(255,255,255,0.015));border:1px solid rgba(255,255,255,0.08);'
+            f'border-left:4px solid {arrow_color};border-radius:0 12px 12px 0;'
+            f'padding:14px 16px;margin-bottom:10px">'
+            # Header
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'margin-bottom:8px">'
+            f'<div style="color:{TEXT_PRIMARY};font-weight:700;font-size:1em">'
+            f'{impact_info["flag"]} {impact_info["country"]}</div>'
+            f'<div>'
+            f'<span style="color:{arrow_color};font-weight:700;font-size:0.9em">'
+            f'{arrow} {abs_pct:.2f}%</span>'
+            f'<span style="color:{mag_color};font-size:0.72em;font-weight:600;'
+            f'padding:2px 6px;background:rgba(255,255,255,0.06);border-radius:4px;'
+            f'margin-left:6px">{magnitude} move</span>'
+            f'</div></div>'
+            # Pair label
+            f'<div style="color:{TEXT_DIM};font-size:0.75em;margin-bottom:8px">'
+            f'{pdata["label"]} — {forex_pairs.get(ticker, {}).get("explain", "")}</div>'
+            # Impact bullets
+            f'{bullet_html}'
+            f'</div>'
+        )
+
+        with cols[idx % 2]:
+            st.markdown(card_html, unsafe_allow_html=True)
+        idx += 1
