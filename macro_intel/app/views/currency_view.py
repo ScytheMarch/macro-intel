@@ -221,17 +221,20 @@ def _fetch_and_display(tickers, period, interval, FOREX_PAIRS,
         return
 
     # ── What This Means — Country Impact Summary ─────────────────────
-    st.markdown(section_header("What This Means For Each Economy"), unsafe_allow_html=True)
-    st.markdown(
-        f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
-        f'Based on the currency moves above, here\'s the real-world impact '
-        f'on each country\'s economy, trade, and markets.</div>',
-        unsafe_allow_html=True,
-    )
+    try:
+        st.markdown(section_header("What This Means For Each Economy"), unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="color:{TEXT_DIM};font-size:0.82em;margin:-8px 0 12px 0">'
+            f'Based on the currency moves above, here\'s the real-world impact '
+            f'on each country\'s economy, trade, and markets.</div>',
+            unsafe_allow_html=True,
+        )
 
-    _render_country_impacts(pair_data, FOREX_PAIRS, glass_card,
-                            TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DIM,
-                            GREEN, RED, YELLOW, GRAY)
+        _render_country_impacts(pair_data, FOREX_PAIRS, glass_card,
+                                TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DIM,
+                                GREEN, RED, YELLOW, GRAY)
+    except Exception as e:
+        st.error(f"Country impact section error: {e}")
 
     # ── Price Charts ─────────────────────────────────────────────────
     st.markdown(section_header("Price Charts"), unsafe_allow_html=True)
